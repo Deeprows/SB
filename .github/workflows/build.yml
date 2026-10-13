@@ -1,1 +1,322 @@
+name: Build Android APK
 
+on:
+  push:            # every push builds; pushing a tag like v1.0.0 also publishes a release
+  workflow_dispatch:
+
+permissions:
+  contents: write  # needed to attach the APK to a GitHub release
+
+jobs:
+  android:
+    name: Build Android Release
+    runs-on: ubuntu-latest
+
+    steps:
+      # ---------------------------------------------------------------
+      # Checkout
+      # ---------------------------------------------------------------
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ---------------------------------------------------------------
+      # Java
+      # ---------------------------------------------------------------
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # ---------------------------------------------------------------
+      # Flutter
+      # ---------------------------------------------------------------
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Create Android project
+        run: |
+          flutter create . \
+            --platforms=android \
+            --project-name=streambox \
+            --org com.deeprows
+
+      - name: Get Flutter dependencies
+        run: flutter pub get
+
+      # ---------------------------------------------------------------
+      # App branding
+      # ---------------------------------------------------------------
+
+      - name: Generate splash screen
+        run: dart run flutter_native_splash:create
+
+      - name: Generate launcher icon
+        run: dart run flutter_launcher_icons
+
+      # ---------------------------------------------------------------
+      # Android configuration
+      # ---------------------------------------------------------------
+
+      - name: Patch AndroidManifest
+        run: python3 tool/patch_android_manifest.py
+
+      - name: Set minimum Android version
+        run: python3 tool/patch_min_sdk.py
+
+      - name: Patch MainActivity
+        run: python3 tool/patch_main_activity.py
+
+      - name: Patch background playback
+        run: python3 tool/patch_background_playback.py
+
+      - name: Patch plugin compileSdk (Android API 36)
+        run: python3 tool/patch_compile_sdk.py
+
+      - name: Configure Kotlin and Java JVM targets
+        run: |
+          {
+            echo ""
+            echo "kotlin.jvm.target.validation.mode=warning"
+          } >> android/gradle.properties
+
+      # ---------------------------------------------------------------
+      # Release signing
+      # ---------------------------------------------------------------
+
+      - name: Restore release keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          test -n "$KEYSTORE_BASE64" || {
+            echo "::error::KEYSTORE_BASE64 secret is not configured."
+            exit 1
+          }
+
+          echo "$KEYSTORE_BASE64" | base64 --decode > android/upload-keystore.jks
+
+          test -f android/upload-keystore.jks || {
+            echo "::error::Release keystore could not be restored."
+            exit 1
+          }
+
+          echo "Release keystore restored."
+
+      - name: Create signing properties
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          test -n "$KEYSTORE_PASSWORD" || {
+            echo "::error::KEYSTORE_PASSWORD secret is not configured."
+            exit 1
+          }
+
+          test -n "$KEY_ALIAS" || {
+            echo "::error::KEY_ALIAS secret is not configured."
+            exit 1
+          }
+
+          test -n "$KEY_PASSWORD" || {
+            echo "::error::KEY_PASSWORD secret is not configured."
+            exit 1
+          }
+
+          cat > android/key.properties <<EOF
+          storePassword=$KEYSTORE_PASSWORD
+          keyPassword=$KEY_PASSWORD
+          keyAlias=$KEY_ALIAS
+          storeFile=upload-keystore.jks
+          EOF
+
+          echo "Android signing properties created."
+
+      - name: Configure release signing
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("android/app/build.gradle.kts")
+
+          if not path.exists():
+              raise SystemExit(
+                  "::error::android/app/build.gradle.kts was not generated."
+              )
+
+          text = path.read_text()
+
+          if 'create("release")' in text:
+              print("Release signing configuration already exists.")
+              raise SystemExit(0)
+
+          header = (
+              "import java.io.FileInputStream\n"
+              "import java.util.Properties\n"
+              "\n"
+              'val keystorePropertiesFile = rootProject.file("key.properties")\n'
+              "val keystoreProperties = Properties()\n"
+              "\n"
+              "if (keystorePropertiesFile.exists()) {\n"
+              "    keystoreProperties.load(FileInputStream(keystorePropertiesFile))\n"
+              "}\n"
+              "\n"
+          )
+
+          text = header + text
+
+          android_marker = "android {"
+
+          if android_marker not in text:
+              raise SystemExit(
+                  "::error::Could not find android { block."
+              )
+
+          signing_config = (
+              "android {\n"
+              "    signingConfigs {\n"
+              '        create("release") {\n'
+              '            keyAlias = keystoreProperties["keyAlias"] as String?\n'
+              '            keyPassword = keystoreProperties["keyPassword"] as String?\n'
+              '            storeFile = keystoreProperties["storeFile"]?.let {\n'
+              "                rootProject.file(it)\n"
+              "            }\n"
+              '            storePassword = keystoreProperties["storePassword"] as String?\n'
+              "        }\n"
+              "    }"
+          )
+
+          text = text.replace(
+              android_marker,
+              signing_config,
+              1,
+          )
+
+          release_marker = "        release {"
+
+          if release_marker not in text:
+              release_marker = "    release {"
+
+          if release_marker not in text:
+              raise SystemExit(
+                  "::error::Could not find release { block."
+              )
+
+          # Flutter's template points release builds at the DEBUG key
+          # (signingConfig = signingConfigs.getByName("debug")). Replace that
+          # line; adding a second one would let the debug line win.
+          debug_line = 'signingConfig = signingConfigs.getByName("debug")'
+          release_line = 'signingConfig = signingConfigs.getByName("release")'
+          if debug_line in text:
+              text = text.replace(debug_line, release_line)
+          else:
+              text = text.replace(
+                  release_marker,
+                  release_marker + "\n            " + release_line,
+                  1,
+              )
+
+          path.write_text(text)
+
+          print("Release signing configured successfully.")
+          PY
+
+          grep -n "signingConfig" android/app/build.gradle.kts
+
+      # ---------------------------------------------------------------
+      # Code quality
+      # ---------------------------------------------------------------
+
+      - name: Analyze Flutter project
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+
+      - name: Run Flutter tests
+        run: flutter test
+
+      # ---------------------------------------------------------------
+      # Build
+      # ---------------------------------------------------------------
+
+      - name: Work out the version
+        id: ver
+        run: |
+          # Tag v1.0.0 -> 1.0.0. Any other push -> 1.0.<run number>.
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            V="${GITHUB_REF_NAME#v}"
+          else
+            V="1.0.${{ github.run_number }}"
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Building version $V"
+
+      - name: Build signed release APK
+        run: |
+          # --build-number grows with every run so a new APK always installs
+          # over the old one as an update.
+          # Size: ship only the two ABIs real phones use (32-bit + 64-bit ARM).
+          # The default also bundles x86_64 (emulators only) which adds ~20 MB.
+          # --split-debug-info strips debug symbols from the Dart code.
+          flutter build apk --release \
+            --target-platform android-arm,android-arm64 \
+            --split-debug-info=build/symbols \
+            --build-name="${{ steps.ver.outputs.version }}" \
+            --build-number="${{ github.run_number }}" \
+            --dart-define=APP_VERSION="${{ steps.ver.outputs.version }}" \
+            --dart-define=GOOGLE_SERVER_CLIENT_ID="${{ secrets.GOOGLE_SERVER_CLIENT_ID }}"
+
+      # ---------------------------------------------------------------
+      # Verify output
+      # ---------------------------------------------------------------
+
+      - name: Verify release APK
+        run: |
+          test -f build/app/outputs/flutter-apk/app-release.apk || {
+            echo "::error::Release APK was not created."
+            exit 1
+          }
+
+          echo "Release APK created successfully."
+
+      - name: Verify APK is signed with the release key
+        run: |
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          "$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-release.apk
+          # A debug key would say "Android Debug" - never ship that.
+          if "$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-release.apk | grep -qi "Android Debug"; then
+            echo "::error::APK is signed with the debug key."
+            exit 1
+          fi
+
+      # ---------------------------------------------------------------
+      # Upload APK
+      # ---------------------------------------------------------------
+
+      - name: Upload release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: streambox-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+
+      # ---------------------------------------------------------------
+      # GitHub release (only when a tag like v1.0.0 is pushed)
+      # ---------------------------------------------------------------
+
+      - name: Name the release file
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          cp build/app/outputs/flutter-apk/app-release.apk \
+            "Streambox-v${{ steps.ver.outputs.version }}.apk"
+
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Streambox v${{ steps.ver.outputs.version }}
+          files: Streambox-v${{ steps.ver.outputs.version }}.apk
+          generate_release_notes: true
