@@ -12,6 +12,9 @@ import 'downloads_screen.dart';
 class BrowseScreen extends StatefulWidget {
   const BrowseScreen({super.key});
 
+  /// A web address opens as it is; anything else becomes a web search.
+  static String resolveInput(String raw) => _BrowseScreenState.resolveInput(raw);
+
   @override
   State<BrowseScreen> createState() => _BrowseScreenState();
 }
