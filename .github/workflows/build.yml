@@ -95,7 +95,7 @@ jobs:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
           test -n "$KEYSTORE_BASE64" || {
-            echo "::error::KEYSTORE_BASE64 secret is not configured."
+            echo "::error::KEYSTORE_BASE64 secret is not configured. Add the 4 signing secrets (see README, or run the \"Create release keystore\" workflow once)."
             exit 1
           }
 
