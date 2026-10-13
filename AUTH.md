@@ -43,3 +43,17 @@ in step 3 must be the one from the `KEYSTORE_BASE64` keystore.
 Common errors: `ApiException: 10` or `12500` = the package name / SHA-1 in
 step 3 does not match the installed APK (or the consent screen is not
 published).
+
+## Getting in while Google is not set up yet
+
+If the Gmail button says "Google sign-in is not set up for this app yet", the
+login page shows **Enter your Gmail address instead**. It accepts any
+`@gmail.com` address (format only; Google does not verify it) so you can use
+the app. Once sign-in works, set `allowGmailFallback = false` in
+`lib/config.dart`.
+
+## Where to find the SHA-1
+
+Open the GitHub Actions run -> step **Show signing SHA-1 (for Google sign-in
+setup)** (also on the run's Summary page). Copy the package name and SHA-1
+into the Android OAuth client in Google Cloud Console.
