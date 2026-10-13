@@ -5,6 +5,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../config.dart';
 import '../services/ad_scheduler.dart';
 import '../services/auth_service.dart';
 import '../theme/app_theme.dart';
@@ -32,6 +33,7 @@ class _LoginScreenState extends State<LoginScreen>
   bool _signup = false;
   bool _busy = false;
   String? _error;
+  bool _setupError = false;
 
   @override
   void initState() {
@@ -73,6 +75,7 @@ class _LoginScreenState extends State<LoginScreen>
     setState(() {
       _busy = true;
       _error = null;
+      _setupError = false;
     });
     final r = await AuthService.instance.signIn();
     if (!mounted) return;
@@ -89,12 +92,59 @@ class _LoginScreenState extends State<LoginScreen>
           _error = 'Please use a Gmail account (name@gmail.com).'.tr;
         });
         return;
+      case SignInResult.setupError:
+        setState(() {
+          _busy = false;
+          _setupError = true;
+          _error = 'Google sign-in is not set up for this app yet.'.tr;
+        });
+        return;
+      case SignInResult.network:
+        setState(() {
+          _busy = false;
+          _error = 'No internet connection. Check it and try again.'.tr;
+        });
+        return;
       case SignInResult.failed:
         setState(() {
           _busy = false;
           _error = 'Could not sign in. Check your internet and try again.'.tr;
         });
         return;
+    }
+  }
+
+  /// Temporary way in while Google sign-in is not set up (see AppConfig).
+  Future<void> _manualGmail() async {
+    final ctrl = TextEditingController();
+    final email = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Enter your Gmail'.tr),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          keyboardType: TextInputType.emailAddress,
+          decoration: const InputDecoration(hintText: 'name@gmail.com'),
+          onSubmitted: (v) => Navigator.pop(ctx, v),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text('CANCEL'.tr)),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, ctrl.text),
+              child: Text('CONTINUE'.tr)),
+        ],
+      ),
+    );
+    if (email == null || !mounted) return;
+    final ok = await AuthService.instance.signInManually(email);
+    if (!mounted) return;
+    if (ok) {
+      widget.onSignedIn();
+    } else {
+      setState(() => _error = 'Please use a Gmail account (name@gmail.com).'.tr);
     }
   }
 
@@ -258,6 +308,23 @@ class _LoginScreenState extends State<LoginScreen>
                     ),
                   ),
           ),
+          if (_error != null && AuthService.instance.lastError.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(AuthService.instance.lastError,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: Ui.dim, fontSize: 10.5)),
+            ),
+          if (_setupError && AppConfig.allowGmailFallback)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: TextButton(
+                onPressed: _manualGmail,
+                child: Text('Enter your Gmail address instead'.tr,
+                    style: const TextStyle(fontWeight: FontWeight.w800)),
+              ),
+            ),
           const SizedBox(height: 14),
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
