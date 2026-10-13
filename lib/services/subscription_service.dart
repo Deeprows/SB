@@ -107,7 +107,7 @@ class TokenState {
   const TokenState(this.state, {this.token, this.days = 0});
 }
 
-/// Free or Premium. The phone only keeps a copy of "premium until <date>";
+/// Free or Premium. The phone only keeps a copy of "premium until {date}";
 /// the truth lives in the Cloudflare Worker (D1), filled in by Paystack.
 class SubscriptionService extends ChangeNotifier {
   SubscriptionService._();
