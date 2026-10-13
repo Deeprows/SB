@@ -1,0 +1,45 @@
+# Gmail login (Login / Sign up)
+
+The first screen is a login page: a moving wall of movie posters (taken from
+`assets/data/movies.json`) with one button, **Login with Gmail** /
+**Continue with Gmail**. Log in and Sign up are the same thing: the first time
+a Gmail account signs in, it is the sign-up.
+
+* Only `@gmail.com` (and `@googlemail.com`) accounts are accepted. Any other
+  Google account (for example a work address) is signed out again and the
+  person sees "Please use a Gmail account".
+* No password and no Firebase. The signed-in account is saved on the phone,
+  so people stay logged in and the app still opens offline.
+* Menu -> account row at the top shows the avatar, name and Gmail; menu ->
+  **Sign out** returns to the login page.
+* Set `AppConfig.loginRequired = false` in `lib/config.dart` to switch the
+  login page off while testing.
+
+## One-time Google setup (needed, or the button shows "Could not sign in")
+
+1. Google Cloud Console -> create / pick a project.
+2. **APIs & Services -> OAuth consent screen**: app name Streambox, your
+   support email. Choose *External*, then **Publish app** (while it is in
+   "Testing", only the test users you add can sign in).
+3. **APIs & Services -> Credentials -> Create credentials -> OAuth client ID
+   -> Android**
+   * Package name: `com.deeprows.streambox`
+   * SHA-1: the SHA-1 of the keystore that signs the APK, i.e. your release
+     key:
+     ```
+     keytool -list -v -keystore upload-keystore.jks -alias <KEY_ALIAS>
+     ```
+     Add a second Android client for the debug key
+     (`~/.android/debug.keystore`, password `android`) if you also run
+     `flutter run`.
+4. (Optional) Create a **Web application** OAuth client and add its client ID
+   as the GitHub secret `GOOGLE_SERVER_CLIENT_ID`. The workflow passes it
+   with `--dart-define`. It is only needed if your own server must verify
+   the ID token; plain sign-in works without it.
+
+Because the app is built by GitHub Actions with your own keystore, the SHA-1
+in step 3 must be the one from the `KEYSTORE_BASE64` keystore.
+
+Common errors: `ApiException: 10` or `12500` = the package name / SHA-1 in
+step 3 does not match the installed APK (or the consent screen is not
+published).
