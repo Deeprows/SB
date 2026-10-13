@@ -1,3 +1,7 @@
 # Android release signing
 upload-keystore.jks
-android/key.propertieskeystore.base64
+android/key.properties
+keystore.base64
+
+# make sure the helpers folder is never ignored
+!lib/utils/
