@@ -1,0 +1,28 @@
+{
+  "_help": "Streambox settings you can change without a new APK. Host this file (raw GitHub link) and put the link in AppConfig.remoteConfigUrl. A missing key = the app's built-in default. Keep it valid JSON (check commas and quotes).",
+
+  "ads": {
+    "enabled": true,
+    "supportUrl": "https://www.profitableratecpmnetwork.com/iqv44jk21?key=c2752cc0c9c553ac66e4fb16cdb95f60",
+    "intervalMinutes": 10,
+    "skipAfterSeconds": 6
+  },
+
+  "movies": {
+    "embedBase": "https://vsembed.su/embed",
+    "altEmbedBase": "https://web.nxsha.app/embed",
+    "downloadBase": "https://web.nxsha.app/dl",
+    "replaceHosts": ["vsembed.ru", "vsembed.su"]
+  },
+
+  "update": {
+    "apkUrl": "",
+    "version": "",
+    "notes": ""
+  },
+
+  "share": {
+    "message": "Get Streambox - stream, download and save movies and series",
+    "link": ""
+  }
+}
