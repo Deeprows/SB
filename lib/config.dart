@@ -180,17 +180,17 @@ class AppConfig {
     defaultValue: 'b83de997ce0ca0406c12cab7f256e43a',
   );
 
-  /// Player (embed) links:  <embedBase>/movie/<tmdb id>  and
-  ///                        <embedBase>/tv/<tmdb id>
+  /// Player (embed) links:  {embedBase}/movie/{tmdb id}  and
+  ///                        {embedBase}/tv/{tmdb id}
   static const embedBase = 'https://vsembed.su/embed';
 
   /// Backup player used by the Switch button on every movie / series page:
-  ///   <altEmbedBase>/movie/<tmdb id>
-  ///   <altEmbedBase>/tv/<tmdb id>/1/1
+  ///   {altEmbedBase}/movie/{tmdb id}
+  ///   {altEmbedBase}/tv/{tmdb id}/1/1
   static const altEmbedBase = 'https://web.nxsha.app/embed';
 
-  /// Download links:  <downloadBase>/movie/<tmdb id>  and
-  ///                  <downloadBase>/tv/<tmdb id>
+  /// Download links:  {downloadBase}/movie/{tmdb id}  and
+  ///                  {downloadBase}/tv/{tmdb id}
   static const downloadBase = 'https://web.nxsha.app/dl';
 
   /// Adds TMDB's trending movies + series (about 40 titles) after the titles
