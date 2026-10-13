@@ -293,6 +293,19 @@ jobs:
             exit 1
           fi
 
+      - name: Show signing SHA-1 (for Google sign-in setup)
+        run: |
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          RAW=$("$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-release.apk | grep -i "SHA-1 digest" | head -1 | awk '{print $NF}')
+          SHA1=$(echo "$RAW" | tr a-z A-Z | sed 's/../&:/g;s/:$//')
+          echo "Package name: com.deeprows.streambox"
+          echo "SHA-1: $SHA1"
+          {
+            echo "### Google sign-in setup"
+            echo "- Package name: \`com.deeprows.streambox\`"
+            echo "- SHA-1: \`$SHA1\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       # ---------------------------------------------------------------
       # Upload APK
       # ---------------------------------------------------------------
