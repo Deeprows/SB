@@ -102,6 +102,8 @@ class _BrowserScreenState extends State<BrowserScreen> {
   bool _blockOn = true;
   bool _firstLoadDone = false;
   final Set<String> _allowedSites = {};
+  final Set<String> _checked = {};
+  final Set<String> _notedSites = {};
 
   @override
   void initState() {
@@ -113,6 +115,8 @@ class _BrowserScreenState extends State<BrowserScreen> {
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setBackgroundColor(Ui.bg)
       ..setUserAgent(AppConfig.userAgent)
+      ..addJavaScriptChannel('SBBridge',
+          onMessageReceived: (m) => _onBridge(m.message))
       ..setNavigationDelegate(NavigationDelegate(
         onNavigationRequest: _onNavigation,
         onPageStarted: (u) {
@@ -200,16 +204,70 @@ class _BrowserScreenState extends State<BrowserScreen> {
         // login hops...): trust them.
         _allowedSites.add(site);
       } else if (!_allowedSites.contains(site)) {
-        _noteBlocked(uri);
+        // Another website after a tap: usually an ad, sometimes the file
+        // host. Block the jump, but check whether it is a file first.
+        _checkNavigation(r.url, crossSite: true);
         return NavigationDecision.prevent;
       }
+    }
+    if (r.isMainFrame && _firstLoadDone && r.url != _url) {
+      // The WebView ignores file responses on its own (nothing happens when
+      // the address has no .mp4/.mkv ending), so look at what it really is.
+      _checkNavigation(r.url, crossSite: false);
     }
     return NavigationDecision.navigate;
   }
 
-  /// Blocked redirects are dropped silently (no notification). The shield
-  /// icon in the menu still lets you allow redirects for this page.
-  void _noteBlocked(Uri uri) {}
+  /// Asks the server what [url] is. A file is downloaded in-app; a blocked
+  /// cross-site page is reported so the person can allow it.
+  Future<void> _checkNavigation(String url, {required bool crossSite}) async {
+    if (!_checked.add(url)) return;
+    Future<void>.delayed(const Duration(seconds: 6), () => _checked.remove(url));
+    final cookie = await _pageCookies();
+    final isFile = await DownloadManager.instance
+        .looksLikeFile(url, referer: _url, cookie: cookie);
+    if (!mounted) return;
+    if (isFile) {
+      _startDownload(url);
+    } else if (crossSite) {
+      final uri = Uri.tryParse(url);
+      if (uri != null) _noteBlocked(uri);
+    }
+  }
+
+  /// Addresses the page tried to open in a pop-up window.
+  Future<void> _onBridge(String url) async {
+    final uri = Uri.tryParse(url);
+    if (uri == null || !(uri.scheme == 'http' || uri.scheme == 'https')) return;
+    if (AdShield.isAdUrl(url)) return;
+    if (isDirectFileLink(url)) {
+      _startDownload(url);
+      return;
+    }
+    _checkNavigation(url, crossSite: false);
+  }
+
+  /// A page redirect to another website was blocked. Say so once per site,
+  /// with an ALLOW button in case it was the real download page.
+  void _noteBlocked(Uri uri) {
+    final site = siteOf(uri.host);
+    if (!mounted || !_notedSites.add(site)) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text('Blocked a redirect to ${uri.host}'),
+        duration: const Duration(seconds: 7),
+        action: SnackBarAction(
+          label: 'ALLOW',
+          textColor: Ui.redSoft,
+          onPressed: () {
+            _allowedSites.add(site);
+            _notedSites.remove(site);
+            _wc.loadRequest(uri);
+          },
+        ),
+      ));
+  }
 
   static const _sniffJs = r'''(function(){var out=[];
 var re=/\.(mp4|mkv|webm|mov|m4v|avi|3gp)(\?|#|$)/i;
