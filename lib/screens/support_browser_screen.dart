@@ -216,7 +216,7 @@ class _SupportBrowserScreenState extends State<SupportBrowserScreen> {
                         const SizedBox(width: 8),
                         const Expanded(
                           child: Text(
-                            'Thank you for supporting Streambox',
+                            'Thank you for supporting DamiMovies',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
