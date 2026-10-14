@@ -286,7 +286,11 @@ class TmdbService {
       final hit = _infoCache[key];
       if (hit != null) return hit;
       final d = await _get('/${t.tv ? 'tv' : 'movie'}/${t.id}',
-          {'append_to_response': 'credits'});
+          {
+        'append_to_response': 'credits,videos',
+        // trailers in English or with no language set
+        'include_video_language': 'en,null',
+      });
       final info = MovieInfo.fromJson(d, tv: t.tv);
       if (info != null && info.hasContent) _infoCache[key] = info;
       return info;
