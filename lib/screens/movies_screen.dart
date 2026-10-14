@@ -391,21 +391,21 @@ class _MoviesScreenState extends State<MoviesScreen> {
           onTap: () => Scaffold.of(context).openDrawer(),
         ),
         const SizedBox(width: 12),
+        // The DamiMovies logo mark (same badge as the splash screen).
         Container(
-          width: 30,
-          height: 30,
+          width: 32,
+          height: 32,
           decoration: BoxDecoration(
-            gradient: Ui.gradient,
             borderRadius: BorderRadius.circular(10),
             boxShadow: [
               BoxShadow(color: Ui.red.withValues(alpha: .5), blurRadius: 12),
             ],
           ),
-          child: Icon(Icons.play_arrow_rounded,
-              size: 22, color: Ui.palette.onAccent),
+          child: Image.asset('assets/splash/logo_mark.png',
+              fit: BoxFit.contain, filterQuality: FilterQuality.high),
         ),
         const SizedBox(width: 9),
-        const Text('Streambox',
+        const Text('DamiMovies',
             style: TextStyle(
               fontSize: 21,
               letterSpacing: -.4,
