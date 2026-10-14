@@ -38,7 +38,7 @@ Future<void> main() async {
   // Background downloader (flutter_downloader) + saved download list.
   await DownloadManager.instance.init();
 
-  runApp(const StreamboxApp());
+  runApp(const DamiMoviesApp());
 
   // Analytics never blocks app startup.
   unawaited(
