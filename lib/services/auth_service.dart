@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show PlatformException;
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config.dart';
@@ -33,7 +34,17 @@ class AuthUser {
   }
 }
 
-enum SignInResult { ok, cancelled, notGmail, setupError, network, failed }
+enum SignInResult {
+  ok,
+  cancelled,
+  notGmail,
+  setupError,
+  network,
+  failed,
+
+  /// Log in was chosen but this Gmail never signed up.
+  notRegistered,
+}
 
 /// Gmail-only sign-in (Google Sign-In). No password, no Firebase.
 /// The saved account is read at start-up, so people stay signed in and the
@@ -43,6 +54,7 @@ class AuthService extends ChangeNotifier {
   static final AuthService instance = AuthService._();
 
   static const _kUser = 'auth_user';
+  static const _kRegistered = 'auth_registered';
 
   final GoogleSignIn _google = GoogleSignIn(
     scopes: const ['email', 'profile'],
@@ -70,13 +82,101 @@ class AuthService extends ChangeNotifier {
       final raw = (await SharedPreferences.getInstance()).getString(_kUser);
       if (raw != null) {
         final u = AuthUser.fromJson(jsonDecode(raw));
-        if (u != null && isGmail(u.email)) _user = u;
+        if (u != null && isGmail(u.email)) {
+          _user = u;
+          // People who were already signed in count as signed up, so they
+          // can log back in after signing out.
+          await _rememberRegistered(u.email);
+          _server('signup', u.email); // best effort, not awaited
+        }
       }
     } catch (_) {}
   }
 
-  /// Opens the Google account picker. Returns what happened.
-  Future<SignInResult> signIn() async {
+  // ------------------------------------------------------------ registry
+  // A Gmail address must sign up once before it can log in. The list of
+  // signed-up addresses lives on the server (Worker + D1) when
+  // AppConfig.feedBase is set, and is also remembered on this phone so
+  // people who already signed up can still log in offline.
+
+  static String _norm(String email) =>
+      email.trim().toLowerCase().replaceAll('@googlemail.com', '@gmail.com');
+
+  Future<Set<String>> _localRegistry() async {
+    try {
+      final raw = (await SharedPreferences.getInstance()).getString(_kRegistered);
+      if (raw != null) {
+        return (jsonDecode(raw) as List).map((e) => '$e').toSet();
+      }
+    } catch (_) {}
+    return <String>{};
+  }
+
+  Future<void> _rememberRegistered(String email) async {
+    try {
+      final set = await _localRegistry()..add(_norm(email));
+      await (await SharedPreferences.getInstance())
+          .setString(_kRegistered, jsonEncode(set.toList()));
+    } catch (_) {}
+  }
+
+  /// Calls the Worker. Returns the HTTP status, or null when unreachable.
+  Future<int?> _server(String path, String email) async {
+    final base = AppConfig.feedBase.trim().replaceAll(RegExp(r'/+$'), '');
+    if (base.isEmpty) return null;
+    try {
+      final res = await http
+          .post(
+            Uri.parse('$base/auth/$path'),
+            headers: const {'content-type': 'application/json'},
+            body: jsonEncode({'email': _norm(email)}),
+          )
+          .timeout(const Duration(seconds: 12));
+      return res.statusCode;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Sign up: register the address. Log in: it must already be registered.
+  /// Returns [SignInResult.ok] when the person may continue.
+  Future<SignInResult> _gate(String email, {required bool signup}) async {
+    final hasServer = AppConfig.feedBase.trim().isNotEmpty;
+
+    if (signup) {
+      if (hasServer) {
+        final code = await _server('signup', email);
+        if (code == 200) {
+          await _rememberRegistered(email);
+          return SignInResult.ok;
+        }
+        // 503: the Worker has no database yet; fall back to this phone only.
+        if (code != 503) {
+          return code == null ? SignInResult.network : SignInResult.failed;
+        }
+      }
+      await _rememberRegistered(email);
+      return SignInResult.ok;
+    }
+
+    // Log in.
+    if ((await _localRegistry()).contains(_norm(email))) return SignInResult.ok;
+    if (hasServer) {
+      final code = await _server('login', email);
+      if (code == 200) {
+        await _rememberRegistered(email);
+        return SignInResult.ok;
+      }
+      if (code == 404) return SignInResult.notRegistered;
+      if (code == null) return SignInResult.network;
+      if (code != 503) return SignInResult.failed;
+    }
+    return SignInResult.notRegistered;
+  }
+
+  /// Opens the Google account picker. [signup] true = Sign up (registers the
+  /// address), false = Log in (only for addresses that signed up before).
+  Future<SignInResult> signIn({bool signup = false}) async {
     lastError = '';
     final started = DateTime.now();
     try {
@@ -91,6 +191,13 @@ class AuthService extends ChangeNotifier {
           await _google.signOut();
         } catch (_) {}
         return SignInResult.notGmail;
+      }
+      final gate = await _gate(acc.email, signup: signup);
+      if (gate != SignInResult.ok) {
+        try {
+          await _google.signOut();
+        } catch (_) {}
+        return gate;
       }
       await _save(AuthUser(
         email: acc.email,
@@ -132,11 +239,14 @@ class AuthService extends ChangeNotifier {
 
   /// Fallback while Google sign-in is not set up: accepts a typed Gmail
   /// address. Only the format is checked, Google does not verify it.
-  Future<bool> signInManually(String email) async {
+  Future<SignInResult> signInManually(String email,
+      {bool signup = false}) async {
     final e = email.trim().toLowerCase();
-    if (!isGmail(e) || e.split('@').first.isEmpty) return false;
+    if (!isGmail(e) || e.split('@').first.isEmpty) return SignInResult.notGmail;
+    final gate = await _gate(e, signup: signup);
+    if (gate != SignInResult.ok) return gate;
     await _save(AuthUser(email: e, name: e.split('@').first));
-    return true;
+    return SignInResult.ok;
   }
 
   Future<void> _save(AuthUser u) async {
