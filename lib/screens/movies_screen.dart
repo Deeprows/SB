@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' show ImageFilter;
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
@@ -15,6 +16,7 @@ import '../theme/app_theme.dart';
 import '../utils/l10n.dart';
 import '../utils/open_movie.dart';
 import '../widgets/app_refresh.dart';
+import '../widgets/glass.dart';
 import '../widgets/netflix_widgets.dart';
 import 'library_screen.dart';
 
@@ -43,6 +45,10 @@ class _MoviesScreenState extends State<MoviesScreen> {
   Timer? _debounce;
   final _search = TextEditingController();
   final _sc = ScrollController();
+  final _heroCtl = PageController();
+  Timer? _heroTimer;
+  int _heroPage = 0;
+  int _heroCount = 0;
 
   // The row order is shuffled once per day (local midnight).
   Timer? _midnight;
@@ -92,6 +98,14 @@ class _MoviesScreenState extends State<MoviesScreen> {
       if (s != _solid && mounted) setState(() => _solid = s);
     });
     _armMidnight();
+    // The billboard flips to the next title every few seconds.
+    _heroTimer = Timer.periodic(const Duration(seconds: 7), (_) {
+      if (!mounted || _heroCount < 2 || !_heroCtl.hasClients) return;
+      if (_sc.hasClients && _sc.offset > 200) return; // not visible
+      _heroCtl.animateToPage((_heroPage + 1) % _heroCount,
+          duration: const Duration(milliseconds: 600),
+          curve: Curves.easeOutCubic);
+    });
   }
 
   void _onLibrary() {
@@ -126,6 +140,8 @@ class _MoviesScreenState extends State<MoviesScreen> {
     MovieLibrary.instance.removeListener(_onLibrary);
     _debounce?.cancel();
     _midnight?.cancel();
+    _heroTimer?.cancel();
+    _heroCtl.dispose();
     _search.dispose();
     _sc.dispose();
     super.dispose();
@@ -264,68 +280,88 @@ class _MoviesScreenState extends State<MoviesScreen> {
 
   Widget _topBar(double top, bool grid) {
     final solid = _solid || grid;
+    final content = Padding(
+      padding: EdgeInsets.fromLTRB(14, top + 8, 14, 8),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _searching ? _searchRow() : _brandRow(),
+          if (!_searching) ...[
+            const SizedBox(height: 10),
+            _chips(),
+          ],
+        ],
+      ),
+    );
+    if (solid) {
+      return ClipRect(
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: Ui.bg.withValues(alpha: .80),
+              border: Border(bottom: BorderSide(color: Ui.line)),
+            ),
+            child: content,
+          ),
+        ),
+      );
+    }
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: solid ? Ui.bg.withValues(alpha: .96) : null,
-        gradient: solid
-            ? null
-            : LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  Colors.black.withValues(alpha: .78),
-                  Colors.transparent,
-                ],
-              ),
-      ),
-      child: Padding(
-        padding: EdgeInsets.fromLTRB(4, top + 4, 4, 6),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _searching ? _searchRow() : _brandRow(),
-            if (!_searching) ...[
-              const SizedBox(height: 4),
-              _chips(),
-            ],
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Colors.black.withValues(alpha: .72),
+            Colors.transparent,
           ],
         ),
       ),
+      child: content,
     );
   }
 
   Widget _brandRow() {
-    final saved = MovieLibrary.instance.watchLater.length;
     return Row(
       children: [
-        IconButton(
-          tooltip: 'Menu',
-          onPressed: () => Scaffold.of(context).openDrawer(),
-          icon: const Icon(Icons.menu_rounded),
+        GlassIconButton(
+          icon: Icons.menu_rounded,
+          onTap: () => Scaffold.of(context).openDrawer(),
         ),
-        Text('STREAMBOX',
+        const SizedBox(width: 12),
+        Container(
+          width: 30,
+          height: 30,
+          decoration: BoxDecoration(
+            gradient: Ui.gradient,
+            borderRadius: BorderRadius.circular(10),
+            boxShadow: [
+              BoxShadow(color: Ui.red.withValues(alpha: .5), blurRadius: 12),
+            ],
+          ),
+          child: Icon(Icons.play_arrow_rounded,
+              size: 22, color: Ui.palette.onAccent),
+        ),
+        const SizedBox(width: 9),
+        const Text('Streambox',
             style: TextStyle(
-              color: Ui.red,
               fontSize: 21,
-              letterSpacing: 1.4,
+              letterSpacing: -.4,
               fontWeight: FontWeight.w900,
-              shadows: const [Shadow(color: Colors.black54, blurRadius: 8)],
+              shadows: [Shadow(color: Colors.black54, blurRadius: 8)],
             )),
         const Spacer(),
-        IconButton(
-          tooltip: 'Search',
-          onPressed: () => setState(() => _searching = true),
-          icon: const Icon(Icons.search_rounded, size: 27),
+        GlassIconButton(
+          icon: Icons.search_rounded,
+          onTap: () => setState(() => _searching = true),
         ),
-        IconButton(
-          tooltip: 'My List',
-          onPressed: _openLibrary,
-          icon: Badge(
-            isLabelVisible: saved > 0,
-            label: Text('$saved'),
-            backgroundColor: Ui.red,
-            child: const Icon(Icons.bookmark_border_rounded, size: 26),
-          ),
+        const SizedBox(width: 8),
+        GlassIconButton(
+          icon: MovieLibrary.instance.watchLater.isEmpty
+              ? Icons.bookmark_border_rounded
+              : Icons.bookmark_rounded,
+          onTap: _openLibrary,
         ),
       ],
     );
@@ -334,13 +370,11 @@ class _MoviesScreenState extends State<MoviesScreen> {
   Widget _searchRow() {
     return Row(
       children: [
-        IconButton(
-          onPressed: _closeSearch,
-          icon: const Icon(Icons.arrow_back_rounded),
-        ),
+        GlassIconButton(icon: Icons.arrow_back_rounded, onTap: _closeSearch),
+        const SizedBox(width: 10),
         Expanded(
           child: SizedBox(
-            height: 42,
+            height: 46,
             child: TextField(
               controller: _search,
               autofocus: true,
@@ -360,18 +394,25 @@ class _MoviesScreenState extends State<MoviesScreen> {
                         },
                       ),
                 filled: true,
-                fillColor: Ui.card,
+                fillColor: Colors.white.withValues(alpha: .08),
                 isDense: true,
-                contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                contentPadding: const EdgeInsets.symmetric(vertical: 12),
                 border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(6),
-                  borderSide: BorderSide.none,
+                  borderRadius: BorderRadius.circular(16),
+                  borderSide: BorderSide(color: Ui.glassLine),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  borderSide: BorderSide(color: Ui.glassLine),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  borderSide: BorderSide(color: Ui.red.withValues(alpha: .8)),
                 ),
               ),
             ),
           ),
         ),
-        const SizedBox(width: 10),
       ],
     );
   }
@@ -381,10 +422,10 @@ class _MoviesScreenState extends State<MoviesScreen> {
     Widget gap(Widget w) =>
         Padding(padding: const EdgeInsets.only(right: 8), child: w);
     return SizedBox(
-      height: 36,
+      height: 38,
       child: ListView(
         scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 12),
+        clipBehavior: Clip.none,
         children: [
           if (filtered)
             gap(GestureDetector(
@@ -393,13 +434,12 @@ class _MoviesScreenState extends State<MoviesScreen> {
                 _genre = null;
               }),
               child: Container(
-                width: 36,
-                height: 36,
+                width: 38,
+                height: 38,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: Colors.black.withValues(alpha: .25),
-                  border:
-                      Border.all(color: Colors.white.withValues(alpha: .55)),
+                  color: Colors.white.withValues(alpha: .09),
+                  border: Border.all(color: Ui.glassLine),
                 ),
                 child: const Icon(Icons.close_rounded, size: 18),
               ),
@@ -428,62 +468,47 @@ class _MoviesScreenState extends State<MoviesScreen> {
     );
   }
 
-  /// Full-height black list of categories, like Netflix's "Categories".
+  /// Bottom sheet with every category as a tappable pill.
   void _showCategories() {
     final names = _genres;
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      backgroundColor: Ui.bg.withValues(alpha: .97),
-      builder: (ctx) => SizedBox(
-        height: MediaQuery.of(ctx).size.height * .92,
-        child: Column(
-          children: [
-            Expanded(
-              child: ListView(
-                padding: const EdgeInsets.symmetric(vertical: 36),
-                children: [
-                  for (final g in <String?>[null, ...names])
-                    InkWell(
-                      onTap: () {
-                        Navigator.pop(ctx);
-                        _pickGenre(g);
-                      },
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 13),
-                        child: Center(
-                          child: Text(
-                            g == null ? 'All Categories'.tr : g.tr,
-                            style: TextStyle(
-                              fontSize: (g == _genre) ? 22 : 19,
-                              fontWeight:
-                                  (g == _genre) ? FontWeight.w900 : FontWeight.w500,
-                              color: (g == _genre) ? Colors.white : Ui.muted,
-                            ),
-                          ),
-                        ),
+      backgroundColor: Ui.panel,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: ConstrainedBox(
+          constraints:
+              BoxConstraints(maxHeight: MediaQuery.of(ctx).size.height * .7),
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Categories'.tr,
+                    style: const TextStyle(
+                        fontSize: 22,
+                        letterSpacing: -.3,
+                        fontWeight: FontWeight.w900)),
+                const SizedBox(height: 16),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  children: [
+                    for (final g in <String?>[null, ...names])
+                      NfChip(
+                        label: g == null ? 'All Categories'.tr : g.tr,
+                        selected: g == _genre || (g == null && _genre == null),
+                        onTap: () {
+                          Navigator.pop(ctx);
+                          _pickGenre(g);
+                        },
                       ),
-                    ),
-                ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.only(bottom: 22, top: 6),
-              child: Material(
-                color: Colors.white,
-                shape: const CircleBorder(),
-                child: InkWell(
-                  customBorder: const CircleBorder(),
-                  onTap: () => Navigator.pop(ctx),
-                  child: const Padding(
-                    padding: EdgeInsets.all(12),
-                    child: Icon(Icons.close_rounded,
-                        color: Colors.black, size: 26),
-                  ),
+                  ],
                 ),
-              ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );
@@ -492,13 +517,14 @@ class _MoviesScreenState extends State<MoviesScreen> {
   // ------------------------------------------------------------- home page
 
   List<Widget> _homeSlivers(double top) {
-    final hero = _pickHero();
+    final heroes = _heroes();
+    _heroCount = heroes.length;
     final rows = _rows();
     return [
       SliverToBoxAdapter(
-        child: hero == null
+        child: heroes.isEmpty
             ? SizedBox(height: top + 110)
-            : _billboard(hero.$1, top, top10: hero.$2),
+            : _billboard(heroes, top),
       ),
       if (_loading && _all.isEmpty && _trending.isEmpty)
         SliverFillRemaining(
@@ -520,160 +546,187 @@ class _MoviesScreenState extends State<MoviesScreen> {
     ];
   }
 
-  /// (title, isTrendingNumberOne)
-  (Movie, bool)? _pickHero() {
+  /// Up to five titles for the billboard: today's trending first, otherwise
+  /// the day's shuffled picks. Each is (title, isTrending).
+  List<(Movie, bool)> _heroes() {
+    final out = <(Movie, bool)>[];
     for (final m in _trending) {
-      if (m.image.startsWith('http')) return (m, true);
+      if (m.image.startsWith('http')) out.add((m, true));
+      if (out.length >= 5) return out;
     }
+    if (out.isNotEmpty) return out;
     final withArt = _all.where((m) => m.image.startsWith('http')).toList()
       ..sort((a, b) => _dayRank(a).compareTo(_dayRank(b)));
-    return withArt.isEmpty ? null : (withArt.first, false);
+    return [for (final m in withArt.take(5)) (m, false)];
   }
 
   /// TMDB posters come as w500; the billboard is bigger.
   String _big(String url) => url.replaceFirst('/w500/', '/w780/');
 
-  Widget _billboard(Movie m, double top, {required bool top10}) {
+  Widget _billboard(List<(Movie, bool)> heroes, double top) {
     final w = MediaQuery.of(context).size.width;
-    final saved = MovieLibrary.instance.isSaved(m);
-    final genres = m.genres.take(3).map((g) => g.tr).join('  •  ');
-    const shadow = [Shadow(color: Colors.black87, blurRadius: 10)];
+    final h = w * 1.28;
     return SizedBox(
-      height: w * 1.32,
+      height: h,
       child: Stack(
-        fit: StackFit.expand,
         children: [
-          GestureDetector(
-            onTap: () => _details(m),
-            child: CachedNetworkImage(
-              imageUrl: _big(m.image),
-              fit: BoxFit.cover,
-              alignment: Alignment.topCenter,
-              fadeInDuration: const Duration(milliseconds: 300),
-              placeholder: (_, _) => ColoredBox(color: Ui.card),
-              errorWidget: (_, _, _) => ColoredBox(color: Ui.card),
-            ),
-          ),
-          IgnorePointer(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  stops: const [0, .2, .55, 1],
-                  colors: [
-                    Colors.black.withValues(alpha: .7),
-                    Colors.transparent,
-                    Ui.bg.withValues(alpha: .5),
-                    Ui.bg,
-                  ],
-                ),
+          ClipRRect(
+            borderRadius:
+                const BorderRadius.vertical(bottom: Radius.circular(34)),
+            child: SizedBox(
+              height: h,
+              child: PageView.builder(
+                controller: _heroCtl,
+                itemCount: heroes.length,
+                onPageChanged: (i) => setState(() => _heroPage = i),
+                itemBuilder: (_, i) =>
+                    _heroPageItem(heroes[i].$1, heroes[i].$2, i),
               ),
             ),
           ),
-          Positioned(
-            left: 16,
-            right: 16,
-            bottom: 14,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (top10)
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 5, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: Ui.red,
-                          borderRadius: BorderRadius.circular(2),
-                        ),
-                        child: Text('TOP\n10',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                                fontSize: 8,
-                                height: 1,
-                                fontWeight: FontWeight.w900,
-                                color: Ui.palette.onAccent)),
+          // Page dots.
+          if (heroes.length > 1)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 12,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  for (var i = 0; i < heroes.length; i++)
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 250),
+                      margin: const EdgeInsets.symmetric(horizontal: 3),
+                      height: 6,
+                      width: i == _heroPage ? 22 : 6,
+                      decoration: BoxDecoration(
+                        gradient: i == _heroPage ? Ui.gradient : null,
+                        color: i == _heroPage
+                            ? null
+                            : Colors.white.withValues(alpha: .3),
+                        borderRadius: BorderRadius.circular(99),
                       ),
-                      const SizedBox(width: 8),
-                      Text('#1 in Trending Today'.tr,
-                          style: const TextStyle(
-                              fontSize: 14.5,
-                              fontWeight: FontWeight.w800,
-                              shadows: shadow)),
-                    ],
-                  ),
-                const SizedBox(height: 8),
-                Text(m.title,
-                    textAlign: TextAlign.center,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                        fontSize: 34,
-                        height: 1.05,
-                        fontWeight: FontWeight.w900,
-                        shadows: shadow)),
-                if (genres.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  Text(genres,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          shadows: shadow)),
+                    ),
                 ],
-                const SizedBox(height: 14),
-                Row(
-                  children: [
-                    Expanded(
-                      child: SizedBox(
-                        height: 44,
-                        child: FilledButton.icon(
-                          onPressed: () => _playNow(m),
-                          style: FilledButton.styleFrom(
-                            backgroundColor: Colors.white,
-                            foregroundColor: Colors.black,
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(4)),
-                          ),
-                          icon: const Icon(Icons.play_arrow_rounded, size: 28),
-                          label: Text('Play'.tr,
-                              style: const TextStyle(
-                                  fontSize: 16, fontWeight: FontWeight.w800)),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: SizedBox(
-                        height: 44,
-                        child: FilledButton.icon(
-                          onPressed: () => _toggleList(m),
-                          style: FilledButton.styleFrom(
-                            backgroundColor:
-                                const Color(0xFF3A3A3A).withValues(alpha: .9),
-                            foregroundColor: Colors.white,
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(4)),
-                          ),
-                          icon: Icon(
-                              saved ? Icons.check_rounded : Icons.add_rounded,
-                              size: 24),
-                          label: Text('My List'.tr,
-                              style: const TextStyle(
-                                  fontSize: 16, fontWeight: FontWeight.w800)),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
+              ),
             ),
-          ),
         ],
       ),
+    );
+  }
+
+  Widget _heroPageItem(Movie m, bool trending, int index) {
+    final saved = MovieLibrary.instance.isSaved(m);
+    final genres = m.genres.take(3).map((g) => g.tr).join('  •  ');
+    const shadow = [Shadow(color: Colors.black87, blurRadius: 12)];
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        GestureDetector(
+          onTap: () => _details(m),
+          child: CachedNetworkImage(
+            imageUrl: _big(m.image),
+            fit: BoxFit.cover,
+            alignment: Alignment.topCenter,
+            fadeInDuration: const Duration(milliseconds: 300),
+            placeholder: (_, _) => ColoredBox(color: Ui.card),
+            errorWidget: (_, _, _) => ColoredBox(color: Ui.card),
+          ),
+        ),
+        IgnorePointer(
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                stops: const [0, .22, .5, 1],
+                colors: [
+                  Colors.black.withValues(alpha: .7),
+                  Colors.transparent,
+                  Ui.bg.withValues(alpha: .55),
+                  Ui.bg.withValues(alpha: .96),
+                ],
+              ),
+            ),
+          ),
+        ),
+        Positioned(
+          left: 20,
+          right: 20,
+          bottom: 34,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      gradient: Ui.gradient,
+                      borderRadius: BorderRadius.circular(99),
+                    ),
+                    child: Text(
+                        trending
+                            ? '#${index + 1} ${'Trending Today'.tr}'
+                            : 'Featured'.tr,
+                        style: TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w800,
+                            color: Ui.palette.onAccent)),
+                  ),
+                  if (m.rating != null) ...[
+                    const SizedBox(width: 8),
+                    RatingPill(m.rating!),
+                  ],
+                ],
+              ),
+              const SizedBox(height: 10),
+              Text(m.title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 34,
+                      height: 1.04,
+                      letterSpacing: -.8,
+                      fontWeight: FontWeight.w900,
+                      shadows: shadow)),
+              if (genres.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Text(genres,
+                    style: TextStyle(
+                        fontSize: 13,
+                        color: Colors.white.withValues(alpha: .85),
+                        fontWeight: FontWeight.w600,
+                        shadows: shadow)),
+              ],
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    flex: 11,
+                    child: GradientButton(
+                      label: 'Play'.tr,
+                      icon: Icons.play_arrow_rounded,
+                      onTap: () => _playNow(m),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    flex: 10,
+                    child: GlassButton(
+                      label: 'My List'.tr,
+                      icon: saved ? Icons.check_rounded : Icons.add_rounded,
+                      onTap: () => _toggleList(m),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
@@ -784,13 +837,13 @@ class _MoviesScreenState extends State<MoviesScreen> {
         )
       else
         SliverPadding(
-          padding: const EdgeInsets.fromLTRB(10, 8, 10, 24),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
           sliver: SliverGrid(
             gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: 3,
               childAspectRatio: 2 / 3,
-              mainAxisSpacing: 8,
-              crossAxisSpacing: 8,
+              mainAxisSpacing: 12,
+              crossAxisSpacing: 12,
             ),
             delegate: SliverChildBuilderDelegate(
               (context, i) => NfPoster(
