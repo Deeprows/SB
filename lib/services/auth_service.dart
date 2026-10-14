@@ -120,8 +120,9 @@ class AuthService extends ChangeNotifier {
     } catch (_) {}
   }
 
-  /// Calls the Worker. Returns the HTTP status, or null when unreachable.
-  Future<int?> _server(String path, String email) async {
+  /// Calls the Worker. Returns (status, error-code-from-body), or null when
+  /// the Worker cannot be reached at all.
+  Future<(int, String)?> _server(String path, String email) async {
     final base = AppConfig.feedBase.trim().replaceAll(RegExp(r'/+$'), '');
     if (base.isEmpty) return null;
     try {
@@ -132,11 +133,24 @@ class AuthService extends ChangeNotifier {
             body: jsonEncode({'email': _norm(email)}),
           )
           .timeout(const Duration(seconds: 12));
-      return res.statusCode;
+      var err = '';
+      try {
+        final j = jsonDecode(res.body);
+        if (j is Map && j['error'] != null) err = '${j['error']}';
+      } catch (_) {}
+      return (res.statusCode, err);
     } catch (_) {
       return null;
     }
   }
+
+  /// True when the server answered but has no accounts feature (an older
+  /// Worker without /auth routes, or one without its database yet). The app
+  /// then keeps the registry on this phone instead of failing.
+  bool _serverLacksAccounts((int, String) r) =>
+      r.$1 == 503 ||
+      r.$1 == 405 ||
+      (r.$1 == 404 && r.$2 != 'not_registered');
 
   /// Sign up: register the address. Log in: it must already be registered.
   /// Returns [SignInResult.ok] when the person may continue.
@@ -145,14 +159,14 @@ class AuthService extends ChangeNotifier {
 
     if (signup) {
       if (hasServer) {
-        final code = await _server('signup', email);
-        if (code == 200) {
+        final r = await _server('signup', email);
+        if (r == null) return SignInResult.network;
+        if (r.$1 == 200) {
           await _rememberRegistered(email);
           return SignInResult.ok;
         }
-        // 503: the Worker has no database yet; fall back to this phone only.
-        if (code != 503) {
-          return code == null ? SignInResult.network : SignInResult.failed;
+        if (!_serverLacksAccounts(r)) {
+          return r.$1 == 400 ? SignInResult.notGmail : SignInResult.failed;
         }
       }
       await _rememberRegistered(email);
@@ -162,14 +176,18 @@ class AuthService extends ChangeNotifier {
     // Log in.
     if ((await _localRegistry()).contains(_norm(email))) return SignInResult.ok;
     if (hasServer) {
-      final code = await _server('login', email);
-      if (code == 200) {
+      final r = await _server('login', email);
+      if (r == null) return SignInResult.network;
+      if (r.$1 == 200) {
         await _rememberRegistered(email);
         return SignInResult.ok;
       }
-      if (code == 404) return SignInResult.notRegistered;
-      if (code == null) return SignInResult.network;
-      if (code != 503) return SignInResult.failed;
+      if (r.$1 == 404 && r.$2 == 'not_registered') {
+        return SignInResult.notRegistered;
+      }
+      if (!_serverLacksAccounts(r)) {
+        return r.$1 == 400 ? SignInResult.notGmail : SignInResult.failed;
+      }
     }
     return SignInResult.notRegistered;
   }
