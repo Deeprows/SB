@@ -275,7 +275,6 @@ ThemeData buildTheme() {
     splashFactory: InkSparkle.splashFactory,
     pageTransitionsTheme: const PageTransitionsTheme(builders: {
       TargetPlatform.android: FadeForwardsPageTransitionsBuilder(),
-      TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
     }),
     appBarTheme: AppBarTheme(
       backgroundColor: Ui.bg,
