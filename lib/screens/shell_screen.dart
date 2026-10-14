@@ -96,7 +96,7 @@ class _ShellScreenState extends State<ShellScreen>
       },
       child: Scaffold(
         key: _scaffoldKey,
-        drawer: const StreamboxDrawer(),
+        drawer: const DamiMoviesDrawer(),
         extendBody: false,
         body: IndexedStack(
           index: _index,
