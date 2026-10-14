@@ -42,7 +42,7 @@ if add:
 if "usesCleartextTraffic" not in s:
     s = s.replace("<application", '<application android:usesCleartextTraffic="true"', 1)
 
-s = re.sub(r'android:label="[^"]*"', 'android:label="Streambox"', s, count=1)
+s = re.sub(r'android:label="[^"]*"', 'android:label="DamiMovies"', s, count=1)
 
 if "WorkManagerInitializer" not in s:
     block = (
