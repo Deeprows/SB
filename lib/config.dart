@@ -1,6 +1,6 @@
 /// Central place for the things you are most likely to edit.
 class AppConfig {
-  static const appName = 'Streambox';
+  static const appName = 'DamiMovies';
 
   /// Google sign-in (Gmail only). Optional "Web client ID" from Google Cloud
   /// Console -> Credentials; only needed if you also want an ID token for
@@ -91,7 +91,7 @@ class AppConfig {
   /// Chat message that is pre-filled when the person messages you for a token
   /// (their ID is added under it). Uses [whatsappUrl], or [joinUrl] if empty.
   static const tokenRequestMessage =
-      'I need token to remove ads from Streambox app';
+      'I need token to remove ads from DamiMovies app';
 
   /// true: the plans page shows on every launch for people who are not
   /// premium. false: only on the first launch and after a premium ends.
@@ -109,7 +109,7 @@ class AppConfig {
   /// person it is coming soon. The app adds the person's ID to the message.
   static const whatsappUrl = 'https://wa.me/2348164887683';
   static const whatsappMessage =
-      'Hello, I want to pay for Streambox Premium manually.';
+      'Hello, I want to pay for DamiMovies Premium manually.';
 
   /// ---- "We Need Your Support" ad page (free plan) --------------------------
   ///
