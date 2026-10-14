@@ -207,6 +207,18 @@ class Ui {
   static Color get line => palette.line;
   static Color get green => palette.green;
   static const radius = 16.0;
+  static const radiusL = 22.0;
+
+  /// Brand gradient (accent -> its soft companion) for primary buttons.
+  static LinearGradient get gradient => LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [palette.accent, palette.accentSoft],
+      );
+
+  /// Soft glass fill used by floating panels and chips.
+  static Color get glass => Colors.white.withValues(alpha: .08);
+  static Color get glassLine => Colors.white.withValues(alpha: .14);
 }
 
 /// Holds the selected theme, saves it, and repaints the whole app when it
@@ -260,11 +272,43 @@ ThemeData buildTheme() {
     brightness: Brightness.dark,
     colorScheme: scheme,
     scaffoldBackgroundColor: Ui.bg,
-    splashFactory: InkRipple.splashFactory,
+    splashFactory: InkSparkle.splashFactory,
+    pageTransitionsTheme: const PageTransitionsTheme(builders: {
+      TargetPlatform.android: FadeForwardsPageTransitionsBuilder(),
+      TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
+    }),
     appBarTheme: AppBarTheme(
       backgroundColor: Ui.bg,
       elevation: 0,
       scrolledUnderElevation: 0,
+      centerTitle: false,
+      titleTextStyle: const TextStyle(
+          fontSize: 22, fontWeight: FontWeight.w800, letterSpacing: -.3),
+    ),
+    tabBarTheme: TabBarThemeData(
+      dividerColor: Colors.transparent,
+      indicatorSize: TabBarIndicatorSize.label,
+    ),
+    inputDecorationTheme: InputDecorationTheme(
+      filled: true,
+      fillColor: Ui.card,
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: BorderSide(color: Ui.line),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: BorderSide(color: Ui.line),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: BorderSide(color: Ui.red.withValues(alpha: .8)),
+      ),
+    ),
+    filledButtonTheme: FilledButtonThemeData(
+      style: FilledButton.styleFrom(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      ),
     ),
     navigationBarTheme: NavigationBarThemeData(
       backgroundColor: Ui.panel,
@@ -288,15 +332,18 @@ ThemeData buildTheme() {
       behavior: SnackBarBehavior.floating,
       backgroundColor: Ui.card,
       contentTextStyle: const TextStyle(color: Colors.white),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
     ),
-    dialogTheme: DialogThemeData(backgroundColor: Ui.panel),
+    dialogTheme: DialogThemeData(
+      backgroundColor: Ui.panel,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+    ),
     drawerTheme: DrawerThemeData(backgroundColor: Ui.cardDeep),
     bottomSheetTheme: BottomSheetThemeData(
       backgroundColor: Ui.panel,
       surfaceTintColor: Colors.transparent,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
     ),
   );
