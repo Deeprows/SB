@@ -20,6 +20,10 @@
  *   CF_API_TOKEN     secret
  *   ANALYTICS        Analytics Engine binding
  *
+ * Ratings (D1 `DB` binding):
+ *   GET  /rating?key=movie:550            -> {avg, count}
+ *   POST /rate {key, voter, stars 0-5}    -> {avg, count} (0 removes the vote)
+ *
  * Accounts (D1 `DB` binding), see AUTH.md:
  *   POST /auth/signup  {email}  registers a Gmail address (safe to repeat)
  *   POST /auth/login   {email}  200 if registered, 404 not_registered if not
@@ -59,7 +63,7 @@ const FILES = {
 const DEFAULT_RAW_BASE =
   "https://raw.githubusercontent.com/Deeprows/myflutter-app/main/assets/data";
 
-const DATASET = "deeprowss_app";
+const DATASET = "streambox_app";
 
 const CORS = {
   "access-control-allow-origin": "*",
@@ -117,6 +121,11 @@ export default {
       request.method === "GET"
     ) {
       return stats(url, env);
+    }
+
+    // Ratings: GET /rating?key=movie:123  /  POST /rate {key, voter, stars}.
+    if (url.pathname === "/rating" || url.pathname === "/rate") {
+      return ratings(request, env, url);
     }
 
     // Accounts: sign up first, then log in (see AUTH.md).
@@ -960,6 +969,57 @@ async function ensureSchema(env) {
     ),
   ]);
   schemaReady = true;
+}
+
+// ---- ratings -----------------------------------------------------------------
+
+async function ratings(request, env, url) {
+  if (!env.DB) return json({ error: "ratings are not set up on the server" }, 503);
+  try {
+    await env.DB.prepare(
+      "CREATE TABLE IF NOT EXISTS ratings (key TEXT NOT NULL, voter TEXT NOT NULL, stars INTEGER NOT NULL, updated INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (key, voter))"
+    ).run();
+
+    let key = "";
+    if (request.method === "POST") {
+      let body = {};
+      try {
+        body = await request.json();
+      } catch (_) {}
+      key = String((body && body.key) || "").slice(0, 120);
+      const voter = String((body && body.voter) || "").slice(0, 120);
+      const stars = Math.round(Number(body && body.stars));
+      if (!key || !voter || !(stars >= 0 && stars <= 5)) {
+        return json({ error: "bad request" }, 400);
+      }
+      if (stars === 0) {
+        await env.DB.prepare("DELETE FROM ratings WHERE key = ? AND voter = ?")
+          .bind(key, voter)
+          .run();
+      } else {
+        await env.DB.prepare(
+          "INSERT INTO ratings (key, voter, stars, updated) VALUES (?, ?, ?, ?) ON CONFLICT(key, voter) DO UPDATE SET stars = excluded.stars, updated = excluded.updated"
+        )
+          .bind(key, voter, stars, Math.floor(Date.now() / 1000))
+          .run();
+      }
+    } else {
+      key = String(url.searchParams.get("key") || "").slice(0, 120);
+      if (!key) return json({ error: "bad request" }, 400);
+    }
+
+    const row = await env.DB.prepare(
+      "SELECT AVG(stars) AS avg, COUNT(*) AS count FROM ratings WHERE key = ?"
+    )
+      .bind(key)
+      .first();
+    const count = (row && row.count) || 0;
+    const avg = count ? Math.round(row.avg * 10) / 10 : 0;
+    return json({ ok: true, avg, count });
+  } catch (e) {
+    console.error("ratings error", e && e.message);
+    return json({ error: "server error" }, 500);
+  }
 }
 
 // ---- accounts ----------------------------------------------------------------
