@@ -1,534 +1,612 @@
+import 'dart:async';
+import 'dart:ui' show ImageFilter;
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
-import 'package:share_plus/share_plus.dart';
 
+import '../config.dart';
 import '../models/movie.dart';
-import '../models/movie_info.dart';
+import '../services/content_sync.dart';
+import '../services/feed_service.dart';
+import '../services/locale_service.dart';
 import '../services/movie_library.dart';
-import '../services/remote_config.dart';
+import '../services/support_gate.dart';
 import '../services/tmdb_service.dart';
 import '../theme/app_theme.dart';
 import '../utils/l10n.dart';
 import '../utils/open_movie.dart';
-import '../widgets/movie_card.dart' show MoviePoster, initialsOf;
-import 'browser_screen.dart' show openInApp;
+import '../widgets/app_refresh.dart';
+import '../widgets/glass.dart';
+import '../widgets/netflix_widgets.dart';
+import 'library_screen.dart';
 
-/// Netflix-style title page: big artwork with a play button, title, match /
-/// year / length row, white Play and grey Download buttons, synopsis, cast,
-/// My List / Share, and the "More Like This" / "Details" tabs.
-class TitleScreen extends StatefulWidget {
-  final Movie movie;
-  const TitleScreen({super.key, required this.movie});
+/// Netflix-style home: a big billboard for today's top title, then rows
+/// (Continue Watching, Trending Now, Top 10, My List, categories...).
+/// Searching or picking Series / Movies / a category switches to a poster grid.
+class MoviesScreen extends StatefulWidget {
+  const MoviesScreen({super.key});
 
   @override
-  State<TitleScreen> createState() => _TitleScreenState();
+  State<MoviesScreen> createState() => _MoviesScreenState();
 }
 
-class _TitleScreenState extends State<TitleScreen> {
-  MovieInfo? _info;
-  bool _infoLoading = false;
-  List<Movie>? _similar;
-  int _tab = 0; // 0 = More Like This, 1 = Details
-  bool _more = false;
+class _MoviesScreenState extends State<MoviesScreen> {
+  List<Movie> _all = const [];
+  List<Movie> _trending = const []; // TMDB trending, most popular first
+  bool _loading = true;
+  String _query = '';
+  String? _genre;
+  String? _type; // null = all, 'movie' or 'tv'
+  List<Movie> _found = const []; // TMDB search results
+  final Map<String, List<Movie>> _discover = {}; // TMDB titles per category
+  bool _discovering = false;
+  bool _searching = false;
+  bool _solid = false; // top bar turns solid after scrolling past the billboard
+  Timer? _debounce;
+  final _search = TextEditingController();
+  final _sc = ScrollController();
+  final _heroCtl = PageController();
+  Timer? _heroTimer;
+  int _heroPage = 0;
+  int _heroCount = 0;
 
-  static const _netflixGrey = Color(0xFF2A2A2A);
+  // The row order is shuffled once per day (local midnight).
+  Timer? _midnight;
+  int _dayKey = _today();
+
+  static int _today() {
+    final n = DateTime.now();
+    return n.year * 10000 + n.month * 100 + n.day;
+  }
+
+  /// Rebuilds the front page when the day changes while the app is open.
+  void _armMidnight() {
+    _midnight?.cancel();
+    final n = DateTime.now();
+    final next = DateTime(n.year, n.month, n.day + 1, 0, 0, 2);
+    _midnight = Timer(next.difference(n), () {
+      if (!mounted) return;
+      setState(() => _dayKey = _today());
+      _armMidnight();
+    });
+  }
+
+  /// Same title, same day -> same number, so the order holds all day and
+  /// changes tomorrow. New titles added meanwhile don't reshuffle the rest.
+  int _dayRank(Movie m) {
+    var h = 0x811C9DC5;
+    for (final c in '$_dayKey|${m.url}'.codeUnits) {
+      h = ((h ^ c) * 0x01000193) & 0xFFFFFFFF;
+    }
+    return h;
+  }
 
   @override
   void initState() {
     super.initState();
-    if (TmdbService.enabled) {
-      _infoLoading = true;
-      tmdb.info(widget.movie).then((i) {
-        if (!mounted) return;
-        setState(() {
-          _info = i;
-          _infoLoading = false;
-        });
+    _load().then((_) {
+      if (AppConfig.moviesUrl.isNotEmpty) _load(remote: true);
+    });
+    _loadTrending();
+    ContentSync.tick.addListener(_onSync);
+    AppLocale.notifier.addListener(_onLanguage);
+    MovieLibrary.instance
+      ..load()
+      ..addListener(_onLibrary);
+    _sc.addListener(() {
+      final s = _sc.hasClients && _sc.offset > 70;
+      if (s != _solid && mounted) setState(() => _solid = s);
+    });
+    _armMidnight();
+    // The billboard flips to the next title every few seconds.
+    _heroTimer = Timer.periodic(const Duration(seconds: 7), (_) {
+      if (!mounted || _heroCount < 2 || !_heroCtl.hasClients) return;
+      if (_sc.hasClients && _sc.offset > 200) return; // not visible
+      _heroCtl.animateToPage((_heroPage + 1) % _heroCount,
+          duration: const Duration(milliseconds: 600),
+          curve: Curves.easeOutCubic);
+    });
+  }
+
+  void _onLibrary() {
+    if (mounted) setState(() {});
+  }
+
+  void _onSync() {
+    // Coming back to the app after midnight: pick up the new day's order.
+    if (_dayKey != _today()) setState(() => _dayKey = _today());
+    if (_loading) {
+      Future<void>.delayed(const Duration(seconds: 2), () {
+        if (mounted && !_loading) _load(remote: true);
       });
+      return;
     }
-    _loadSimilar();
+    _load(remote: true);
   }
 
-  // ------------------------------------------------------------------ data
-
-  String _key(Movie m) => m.tmdbId != null
-      ? '${m.isSeries ? 'tv' : 'movie'}:${m.tmdbId}'
-      : m.title.toLowerCase();
-
-  /// "More Like This": popular titles from the same categories.
-  Future<void> _loadSimilar() async {
-    final me = widget.movie;
-    final out = <Movie>[];
-    final seen = <String>{_key(me)};
-    void add(Iterable<Movie> list) {
-      for (final m in list) {
-        if (out.length >= 18) return;
-        if (!m.hasImage) continue;
-        if (seen.add(_key(m))) out.add(m);
-      }
-    }
-
-    try {
-      if (TmdbService.enabled) {
-        for (final g in me.genres.take(3)) {
-          if (out.length >= 18) break;
-          add(await tmdb.discover(g));
-        }
-        if (out.length < 9) add(await tmdb.trending());
-      }
-    } catch (_) {}
-    if (mounted) setState(() => _similar = out);
+  /// New app language: reload so titles and descriptions follow it.
+  void _onLanguage() {
+    _discover.clear();
+    if (_genre != null) _fetchDiscover();
+    if (_query.trim().length >= 2) _onQuery(_query);
+    _load().then((_) => _load(remote: true));
+    _loadTrending();
   }
 
-  // --------------------------------------------------------------- actions
+  @override
+  void dispose() {
+    ContentSync.tick.removeListener(_onSync);
+    AppLocale.notifier.removeListener(_onLanguage);
+    MovieLibrary.instance.removeListener(_onLibrary);
+    _debounce?.cancel();
+    _midnight?.cancel();
+    _heroTimer?.cancel();
+    _heroCtl.dispose();
+    _search.dispose();
+    _sc.dispose();
+    super.dispose();
+  }
 
-  void _play() => openMoviePlayer(context, widget.movie);
+  Future<void> _load({bool remote = false}) async {
+    final list = await feed.loadMovies(remote: remote);
+    if (!mounted) return;
+    setState(() {
+      _all = list;
+      _loading = false;
+    });
+  }
 
-  Future<void> _download() => openInApp(context, widget.movie.downloadUrl,
-      title: widget.movie.title, blockAds: true);
-
-  Future<void> _share() async {
-    final box = context.findRenderObject() as RenderBox?;
-    final origin =
-        box == null ? null : box.localToGlobal(Offset.zero) & box.size;
+  /// Saved copy first (instant), then a fresh one.
+  Future<void> _loadTrending() async {
+    if (!TmdbService.enabled || !AppConfig.tmdbTrending) return;
     try {
-      await Share.share(
-        '${widget.movie.title}\n\n${RemoteConfig.instance.shareText}',
-        sharePositionOrigin: origin,
-      );
+      final cached = await tmdb.trending(fetch: false);
+      if (mounted && cached.isNotEmpty) setState(() => _trending = cached);
+      final fresh = await tmdb.trending();
+      if (mounted && fresh.isNotEmpty) setState(() => _trending = fresh);
     } catch (_) {}
   }
 
-  Future<void> _toggleList(BuildContext c) async {
-    final now = await MovieLibrary.instance.toggleWatchLater(widget.movie);
-    if (!c.mounted) return;
-    ScaffoldMessenger.of(c)
+  /// Searches the whole TMDB catalogue shortly after typing stops.
+  void _onQuery(String v) {
+    setState(() => _query = v);
+    _debounce?.cancel();
+    if (!AppConfig.tmdbSearch || !TmdbService.enabled || v.trim().length < 2) {
+      if (_found.isNotEmpty) setState(() => _found = const []);
+      return;
+    }
+    _debounce = Timer(const Duration(milliseconds: 450), () async {
+      final res = await tmdb.search(v);
+      if (!mounted || _query.trim() != v.trim()) return;
+      setState(() => _found = res);
+    });
+  }
+
+  void _pickGenre(String? g) {
+    setState(() => _genre = (g == null || _genre == g) ? null : g);
+    _fetchDiscover();
+  }
+
+  /// Loads TMDB's popular titles for the selected category.
+  Future<void> _fetchDiscover({bool force = false}) async {
+    final g = _genre;
+    if (g == null || !AppConfig.tmdbCategories || !TmdbService.enabled) return;
+    if (!force && _discover.containsKey(g)) return;
+    setState(() => _discovering = true);
+    final res = await tmdb.discover(g);
+    if (!mounted) return;
+    setState(() {
+      _discover[g] = res;
+      _discovering = false;
+    });
+  }
+
+  List<String> get _genres {
+    final counts = <String, int>{};
+    for (final m in _all) {
+      for (final g in m.genres) {
+        counts[g] = (counts[g] ?? 0) + 1;
+      }
+    }
+    final keys = counts.keys.toList()
+      ..sort((a, b) => counts[b]!.compareTo(counts[a]!));
+    return keys.take(14).toList();
+  }
+
+  void _details(Movie m) {
+    SupportGate.guard(context, () {
+      if (!mounted) return;
+      openMovieTitle(context, m);
+    });
+  }
+
+  void _playNow(Movie m) {
+    SupportGate.guard(context, () {
+      if (!mounted) return;
+      openMoviePlayer(context, m);
+    });
+  }
+
+  Future<void> _toggleList(Movie m) async {
+    final now = await MovieLibrary.instance.toggleWatchLater(m);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(
           duration: const Duration(seconds: 2),
           content: Text(now ? 'Added to My List'.tr : 'Removed from My List'.tr)));
   }
 
+  void _closeSearch() {
+    _search.clear();
+    setState(() => _searching = false);
+    _onQuery('');
+  }
+
+  void _openLibrary() => Navigator.of(context).push(MaterialPageRoute<void>(
+        builder: (_) => const LibraryScreen(initialTab: 0),
+      ));
+
   // ------------------------------------------------------------------ build
 
   @override
   Widget build(BuildContext context) {
-    final m = widget.movie;
-    final info = _info;
-    final w = MediaQuery.of(context).size.width;
+    final q = _query.trim().toLowerCase();
+    final grid = _searching || q.isNotEmpty || _genre != null || _type != null;
     final top = MediaQuery.of(context).padding.top;
 
-    final overview = info?.overview ?? '';
-    final cast = info?.cast.map((c) => c.name).take(4).toList() ?? const [];
-    final directors = info?.directors ?? const <String>[];
-
-    return Scaffold(
-      backgroundColor: Ui.bg,
-      body: Stack(
-        children: [
-          ListView(
-            padding: EdgeInsets.zero,
-            children: [
-              _hero(w * .82),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(m.title,
-                        style: const TextStyle(
-                            fontSize: 26,
-                            height: 1.1,
-                            fontWeight: FontWeight.w900)),
-                    const SizedBox(height: 10),
-                    _metaRow(info),
-                    const SizedBox(height: 16),
-                    _playButton(),
-                    if (m.hasDownload) ...[
-                      const SizedBox(height: 8),
-                      _downloadButton(),
-                    ],
-                    const SizedBox(height: 16),
-                    if (overview.isNotEmpty) _overview(overview),
-                    if (_infoLoading && overview.isEmpty) ...[
-                      for (final f in const [1.0, 1.0, .6]) _bar(f),
-                    ],
-                    if (cast.isNotEmpty)
-                      _credit('Cast'.tr, '${cast.join(', ')}…'),
-                    if (directors.isNotEmpty)
-                      _credit(
-                          m.isSeries ? 'Creators'.tr : 'Director'.tr,
-                          directors.take(3).join(', ')),
-                    const SizedBox(height: 18),
-                    _actionRow(),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 10),
-              _tabs(),
-              if (_tab == 0) _moreLikeThis() else _details(info),
-              SizedBox(height: 28 + MediaQuery.of(context).padding.bottom),
-            ],
+    return Stack(
+      children: [
+        AppRefresh(
+          onRefresh: () async {
+            _discover.clear();
+            await _load(remote: true);
+            await _loadTrending();
+            await _fetchDiscover(force: true);
+            return !feed.lastRemoteFailed;
+          },
+          child: CustomScrollView(
+            controller: _sc,
+            physics: const AlwaysScrollableScrollPhysics(),
+            slivers: grid ? _gridSlivers(q, top) : _homeSlivers(top),
           ),
-          // Back button over the artwork.
-          Positioned(
-            top: top + 6,
-            left: 8,
-            child: _RoundIcon(
-              icon: Icons.arrow_back_rounded,
-              onTap: () => Navigator.of(context).maybePop(),
-            ),
-          ),
-        ],
-      ),
+        ),
+        Positioned(top: 0, left: 0, right: 0, child: _topBar(top, grid)),
+      ],
     );
   }
 
-  // ------------------------------------------------------------------ parts
+  // ------------------------------------------------------------ top bar
 
-  Widget _hero(double h) {
-    final m = widget.movie;
-    final backdrop = _info?.backdrop ?? '';
-    return GestureDetector(
-      onTap: _play,
-      child: SizedBox(
-        height: h,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            if (backdrop.startsWith('http'))
-              CachedNetworkImage(
-                imageUrl: backdrop,
-                fit: BoxFit.cover,
-                alignment: Alignment.topCenter,
-                fadeInDuration: const Duration(milliseconds: 250),
-                placeholder: (_, _) => ColoredBox(color: Ui.card),
-                errorWidget: (_, _, _) => ColoredBox(color: Ui.card),
-              )
-            else
-              _poster(m, radius: 0, alignment: Alignment.topCenter),
-            // Dark fade at the top (for the back button) and into the page.
-            DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  stops: const [0, .28, .62, 1],
-                  colors: [
-                    Colors.black.withValues(alpha: .65),
-                    Colors.transparent,
-                    Ui.bg.withValues(alpha: .35),
-                    Ui.bg,
-                  ],
-                ),
-              ),
+  Widget _topBar(double top, bool grid) {
+    final solid = _solid || grid;
+    final content = Padding(
+      padding: EdgeInsets.fromLTRB(14, top + 8, 14, 8),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _searching ? _searchRow() : _brandRow(),
+          if (!_searching) ...[
+            const SizedBox(height: 10),
+            _chips(),
+          ],
+        ],
+      ),
+    );
+    if (solid) {
+      return ClipRect(
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: Ui.bg.withValues(alpha: .80),
+              border: Border(bottom: BorderSide(color: Ui.line)),
             ),
-            Center(
-              child: Container(
-                width: 68,
-                height: 68,
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: .45),
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white, width: 2),
-                ),
-                child: const Icon(Icons.play_arrow_rounded,
-                    color: Colors.white, size: 44),
-              ),
-            ),
+            child: content,
+          ),
+        ),
+      );
+    }
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Colors.black.withValues(alpha: .72),
+            Colors.transparent,
           ],
         ),
       ),
+      child: content,
     );
   }
 
-  /// "87% Match  2026  1h 44m  HD"
-  Widget _metaRow(MovieInfo? info) {
-    final m = widget.movie;
-    final score = double.tryParse(m.rating ?? '');
-    final runtime = info?.runtimeText ?? '';
-    final seasons = info?.seasons;
-    final facts = <String>[
-      if (m.year != null) m.year!,
-      if (m.isSeries && seasons != null)
-        (seasons == 1 ? '1 Season' : '$seasons Seasons')
-      else if (runtime.isNotEmpty)
-        runtime,
-    ];
-    TextStyle grey() => TextStyle(
-        color: Ui.muted, fontSize: 14, fontWeight: FontWeight.w600);
-    return Wrap(
-      spacing: 10,
-      runSpacing: 6,
-      crossAxisAlignment: WrapCrossAlignment.center,
-      children: [
-        if (score != null)
-          Text('${(score * 10).round()}% ${'Match'.tr}',
-              style: TextStyle(
-                  color: Ui.green, fontSize: 14, fontWeight: FontWeight.w900)),
-        for (final f in facts) Text(f, style: grey()),
-        _badge(m.isSeries ? 'Series'.tr : 'Movie'.tr),
-        _badge('HD'),
-      ],
-    );
-  }
-
-  Widget _badge(String t) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-        decoration: BoxDecoration(
-          border: Border.all(color: Ui.muted.withValues(alpha: .8)),
-          borderRadius: BorderRadius.circular(3),
-        ),
-        child: Text(t,
-            style: TextStyle(
-                color: Ui.muted, fontSize: 11, fontWeight: FontWeight.w700)),
-      );
-
-  Widget _playButton() => SizedBox(
-        height: 46,
-        child: FilledButton.icon(
-          onPressed: _play,
-          style: FilledButton.styleFrom(
-            backgroundColor: Colors.white,
-            foregroundColor: Colors.black,
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
-          ),
-          icon: const Icon(Icons.play_arrow_rounded, size: 30),
-          label: Text('Play'.tr,
-              style:
-                  const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
-        ),
-      );
-
-  Widget _downloadButton() => SizedBox(
-        height: 46,
-        child: FilledButton.icon(
-          onPressed: _download,
-          style: FilledButton.styleFrom(
-            backgroundColor: _netflixGrey,
-            foregroundColor: Colors.white,
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
-          ),
-          icon: const Icon(Icons.download_rounded, size: 24),
-          label: Text('Download'.tr,
-              style:
-                  const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
-        ),
-      );
-
-  Widget _overview(String text) {
-    final long = text.length > 180;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(text,
-            maxLines: _more ? null : 4,
-            overflow: _more ? TextOverflow.visible : TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 14, height: 1.4)),
-        if (long)
-          GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () => setState(() => _more = !_more),
-            child: Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: Text(_more ? 'Less'.tr : 'More'.tr,
-                  style: TextStyle(
-                      color: Ui.muted,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w800)),
-            ),
-          ),
-        const SizedBox(height: 10),
-      ],
-    );
-  }
-
-  Widget _credit(String label, String value) => Padding(
-        padding: const EdgeInsets.only(bottom: 4),
-        child: Text.rich(
-          TextSpan(children: [
-            TextSpan(
-                text: '$label: ',
-                style: TextStyle(color: Ui.dim, fontWeight: FontWeight.w700)),
-            TextSpan(text: value, style: TextStyle(color: Ui.muted)),
-          ]),
-          style: const TextStyle(fontSize: 12.5, height: 1.4),
-        ),
-      );
-
-  Widget _bar(double f) => Padding(
-        padding: const EdgeInsets.only(bottom: 10),
-        child: FractionallySizedBox(
-          widthFactor: f,
-          alignment: Alignment.centerLeft,
-          child: Container(
-            height: 12,
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: .07),
-              borderRadius: BorderRadius.circular(6),
-            ),
-          ),
-        ),
-      );
-
-  /// My List / Share, icon over label, like Netflix.
-  Widget _actionRow() {
+  Widget _brandRow() {
     return Row(
       children: [
-        ListenableBuilder(
-          listenable: MovieLibrary.instance,
-          builder: (context, _) {
-            final saved = MovieLibrary.instance.isSaved(widget.movie);
-            return _Action(
-              icon: saved ? Icons.check_rounded : Icons.add_rounded,
-              label: 'My List'.tr,
-              onTap: () => _toggleList(context),
-            );
-          },
+        GlassIconButton(
+          icon: Icons.menu_rounded,
+          onTap: () => Scaffold.of(context).openDrawer(),
         ),
-        const SizedBox(width: 30),
-        _Action(icon: Icons.send_outlined, label: 'Share'.tr, onTap: _share),
+        const SizedBox(width: 12),
+        Container(
+          width: 30,
+          height: 30,
+          decoration: BoxDecoration(
+            gradient: Ui.gradient,
+            borderRadius: BorderRadius.circular(10),
+            boxShadow: [
+              BoxShadow(color: Ui.red.withValues(alpha: .5), blurRadius: 12),
+            ],
+          ),
+          child: Icon(Icons.play_arrow_rounded,
+              size: 22, color: Ui.palette.onAccent),
+        ),
+        const SizedBox(width: 9),
+        const Text('Streambox',
+            style: TextStyle(
+              fontSize: 21,
+              letterSpacing: -.4,
+              fontWeight: FontWeight.w900,
+              shadows: [Shadow(color: Colors.black54, blurRadius: 8)],
+            )),
+        const Spacer(),
+        GlassIconButton(
+          icon: Icons.search_rounded,
+          onTap: () => setState(() => _searching = true),
+        ),
+        const SizedBox(width: 8),
+        GlassIconButton(
+          icon: MovieLibrary.instance.watchLater.isEmpty
+              ? Icons.bookmark_border_rounded
+              : Icons.bookmark_rounded,
+          onTap: _openLibrary,
+        ),
       ],
     );
   }
 
-  /// MORE LIKE THIS | DETAILS, with the accent bar above the active one.
-  Widget _tabs() {
-    Widget tab(String label, int i) {
-      final on = _tab == i;
-      return GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: () => setState(() => _tab = i),
-        child: Padding(
-          padding: const EdgeInsets.only(right: 26),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 180),
-                height: 3,
-                width: on ? 44 : 0,
-                color: Ui.red,
+  Widget _searchRow() {
+    return Row(
+      children: [
+        GlassIconButton(icon: Icons.arrow_back_rounded, onTap: _closeSearch),
+        const SizedBox(width: 10),
+        Expanded(
+          child: SizedBox(
+            height: 46,
+            child: TextField(
+              controller: _search,
+              autofocus: true,
+              onChanged: _onQuery,
+              textInputAction: TextInputAction.search,
+              decoration: InputDecoration(
+                hintText: 'Search movies and series…'.tr,
+                hintStyle: TextStyle(color: Ui.dim),
+                prefixIcon: Icon(Icons.search_rounded, color: Ui.muted),
+                suffixIcon: _query.isEmpty
+                    ? null
+                    : IconButton(
+                        icon: const Icon(Icons.close_rounded),
+                        onPressed: () {
+                          _search.clear();
+                          _onQuery('');
+                        },
+                      ),
+                filled: true,
+                fillColor: Colors.white.withValues(alpha: .08),
+                isDense: true,
+                contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  borderSide: BorderSide(color: Ui.glassLine),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  borderSide: BorderSide(color: Ui.glassLine),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  borderSide: BorderSide(color: Ui.red.withValues(alpha: .8)),
+                ),
               ),
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                child: Text(label.toUpperCase(),
-                    style: TextStyle(
-                        fontSize: 13.5,
-                        letterSpacing: .4,
-                        fontWeight: FontWeight.w800,
-                        color: on ? Colors.white : Ui.dim)),
-              ),
-            ],
+            ),
           ),
         ),
-      );
-    }
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: Row(children: [
-        tab('More Like This'.tr, 0),
-        tab('Details'.tr, 1),
-      ]),
+      ],
     );
   }
 
-  Widget _moreLikeThis() {
-    final list = _similar;
-    const count = 3;
-    if (list == null) {
-      return _grid([
-        for (var i = 0; i < 6; i++) ColoredBox(color: Ui.card),
-      ], count);
-    }
-    if (list.isEmpty) {
-      return Padding(
-        padding: const EdgeInsets.all(28),
-        child: Center(
-          child: Text('Nothing similar to show yet.'.tr,
-              style: TextStyle(color: Ui.dim, fontSize: 13)),
-        ),
-      );
-    }
-    return _grid([
-      for (final s in list)
-        GestureDetector(
-          onTap: () => openMovieTitle(context, s),
-          child: _poster(s, radius: 4),
-        ),
-    ], count);
+  Widget _chips() {
+    final filtered = _type != null || _genre != null;
+    Widget gap(Widget w) =>
+        Padding(padding: const EdgeInsets.only(right: 8), child: w);
+    return SizedBox(
+      height: 38,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        clipBehavior: Clip.none,
+        children: [
+          if (filtered)
+            gap(GestureDetector(
+              onTap: () => setState(() {
+                _type = null;
+                _genre = null;
+              }),
+              child: Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.white.withValues(alpha: .09),
+                  border: Border.all(color: Ui.glassLine),
+                ),
+                child: const Icon(Icons.close_rounded, size: 18),
+              ),
+            )),
+          if (_type == null || _type == 'tv')
+            gap(NfChip(
+              label: 'TV Shows'.tr,
+              selected: _type == 'tv',
+              onTap: () => setState(() => _type = _type == 'tv' ? null : 'tv'),
+            )),
+          if (_type == null || _type == 'movie')
+            gap(NfChip(
+              label: 'Movies'.tr,
+              selected: _type == 'movie',
+              onTap: () =>
+                  setState(() => _type = _type == 'movie' ? null : 'movie'),
+            )),
+          gap(NfChip(
+            label: _genre == null ? 'Categories'.tr : _genre!.tr,
+            selected: _genre != null,
+            dropdown: true,
+            onTap: _showCategories,
+          )),
+        ],
+      ),
+    );
   }
 
-  Widget _grid(List<Widget> tiles, int count) => GridView.count(
-        crossAxisCount: count,
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
-        mainAxisSpacing: 8,
-        crossAxisSpacing: 8,
-        childAspectRatio: 2 / 3,
-        children: [
-          for (final t in tiles)
-            ClipRRect(borderRadius: BorderRadius.circular(4), child: t),
-        ],
-      );
-
-  Widget _details(MovieInfo? info) {
-    final m = widget.movie;
-    final genres = (info != null && info.genres.isNotEmpty)
-        ? info.genres
-        : m.genres;
-    final rows = <MapEntry<String, String>>[
-      if (genres.isNotEmpty)
-        MapEntry('Genres'.tr, genres.map((g) => g.tr).join(', ')),
-      if (info != null && info.releaseDate.isNotEmpty)
-        MapEntry(m.isSeries ? 'First aired'.tr : 'Released'.tr,
-            info.releaseDate),
-      if (info != null && info.runtimeText.isNotEmpty)
-        MapEntry(m.isSeries ? 'Episode'.tr : 'Runtime'.tr, info.runtimeText),
-      if (info != null && info.language.isNotEmpty)
-        MapEntry('Language'.tr, info.language),
-      if (info != null && info.status.isNotEmpty)
-        MapEntry('Status'.tr, info.status),
-      if (m.rating != null) MapEntry('Rating'.tr, '${m.rating} / 10'),
-      if (info != null && info.directors.isNotEmpty)
-        MapEntry(m.isSeries ? 'Creators'.tr : 'Director'.tr,
-            info.directors.take(3).join(', ')),
-      if (info != null && info.cast.isNotEmpty)
-        MapEntry('Cast'.tr, info.cast.take(12).map((c) => c.name).join(', ')),
-    ];
-    if (rows.isEmpty) {
-      return Padding(
-        padding: const EdgeInsets.all(28),
-        child: Center(
-          child: Text(
-              _infoLoading ? 'Loading…'.tr : 'No more details available.'.tr,
-              style: TextStyle(color: Ui.dim, fontSize: 13)),
+  /// Bottom sheet with every category as a tappable pill.
+  void _showCategories() {
+    final names = _genres;
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Ui.panel,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: ConstrainedBox(
+          constraints:
+              BoxConstraints(maxHeight: MediaQuery.of(ctx).size.height * .7),
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Categories'.tr,
+                    style: const TextStyle(
+                        fontSize: 22,
+                        letterSpacing: -.3,
+                        fontWeight: FontWeight.w900)),
+                const SizedBox(height: 16),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  children: [
+                    for (final g in <String?>[null, ...names])
+                      NfChip(
+                        label: g == null ? 'All Categories'.tr : g.tr,
+                        selected: g == _genre || (g == null && _genre == null),
+                        onTap: () {
+                          Navigator.pop(ctx);
+                          _pickGenre(g);
+                        },
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
         ),
-      );
+      ),
+    );
+  }
+
+  // ------------------------------------------------------------- home page
+
+  List<Widget> _homeSlivers(double top) {
+    final heroes = _heroes();
+    _heroCount = heroes.length;
+    final rows = _rows();
+    return [
+      SliverToBoxAdapter(
+        child: heroes.isEmpty
+            ? SizedBox(height: top + 110)
+            : _billboard(heroes, top),
+      ),
+      if (_loading && _all.isEmpty && _trending.isEmpty)
+        SliverFillRemaining(
+          hasScrollBody: false,
+          child: Center(child: CircularProgressIndicator(color: Ui.red)),
+        )
+      else
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.only(top: 8, bottom: 28),
+            child: Column(
+              children: [
+                for (final r in rows)
+                  Padding(padding: const EdgeInsets.only(bottom: 24), child: r),
+              ],
+            ),
+          ),
+        ),
+    ];
+  }
+
+  /// Up to five titles for the billboard: today's trending first, otherwise
+  /// the day's shuffled picks. Each is (title, isTrending).
+  List<(Movie, bool)> _heroes() {
+    final out = <(Movie, bool)>[];
+    for (final m in _trending) {
+      if (m.image.startsWith('http')) out.add((m, true));
+      if (out.length >= 5) return out;
     }
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    if (out.isNotEmpty) return out;
+    final withArt = _all.where((m) => m.image.startsWith('http')).toList()
+      ..sort((a, b) => _dayRank(a).compareTo(_dayRank(b)));
+    return [for (final m in withArt.take(5)) (m, false)];
+  }
+
+  /// TMDB posters come as w500; the billboard is bigger.
+  String _big(String url) => url.replaceFirst('/w500/', '/w780/');
+
+  Widget _billboard(List<(Movie, bool)> heroes, double top) {
+    final w = MediaQuery.of(context).size.width;
+    final h = w * 1.28;
+    return SizedBox(
+      height: h,
+      child: Stack(
         children: [
-          for (final r in rows)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 14),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+          ClipRRect(
+            borderRadius:
+                const BorderRadius.vertical(bottom: Radius.circular(34)),
+            child: SizedBox(
+              height: h,
+              child: PageView.builder(
+                controller: _heroCtl,
+                itemCount: heroes.length,
+                onPageChanged: (i) => setState(() => _heroPage = i),
+                itemBuilder: (_, i) =>
+                    _heroPageItem(heroes[i].$1, heroes[i].$2, i),
+              ),
+            ),
+          ),
+          // Page dots.
+          if (heroes.length > 1)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 12,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Text(r.key,
-                      style: TextStyle(
-                          color: Ui.dim,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 3),
-                  Text(r.value,
-                      style: const TextStyle(fontSize: 14, height: 1.35)),
+                  for (var i = 0; i < heroes.length; i++)
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 250),
+                      margin: const EdgeInsets.symmetric(horizontal: 3),
+                      height: 6,
+                      width: i == _heroPage ? 22 : 6,
+                      decoration: BoxDecoration(
+                        gradient: i == _heroPage ? Ui.gradient : null,
+                        color: i == _heroPage
+                            ? null
+                            : Colors.white.withValues(alpha: .3),
+                        borderRadius: BorderRadius.circular(99),
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -537,80 +615,245 @@ class _TitleScreenState extends State<TitleScreen> {
     );
   }
 
-  /// Poster that fills its box (square corners; the caller rounds them).
-  Widget _poster(Movie m, {double radius = 0, Alignment alignment = Alignment.center}) {
-    if (m.image.startsWith('http')) {
-      return CachedNetworkImage(
-        imageUrl: m.image,
-        fit: BoxFit.cover,
-        alignment: alignment,
-        memCacheWidth: 500,
-        fadeInDuration: const Duration(milliseconds: 200),
-        placeholder: (_, _) => ColoredBox(color: Ui.card),
-        errorWidget: (_, _, _) => ColoredBox(
-          color: Ui.card,
-          child: Center(
-            child: Text(initialsOf(m.title),
-                style: TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.w900,
-                    color: Colors.white.withValues(alpha: .4))),
+  Widget _heroPageItem(Movie m, bool trending, int index) {
+    final saved = MovieLibrary.instance.isSaved(m);
+    final genres = m.genres.take(3).map((g) => g.tr).join('  •  ');
+    const shadow = [Shadow(color: Colors.black87, blurRadius: 12)];
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        GestureDetector(
+          onTap: () => _details(m),
+          child: CachedNetworkImage(
+            imageUrl: _big(m.image),
+            fit: BoxFit.cover,
+            alignment: Alignment.topCenter,
+            fadeInDuration: const Duration(milliseconds: 300),
+            placeholder: (_, _) => ColoredBox(color: Ui.card),
+            errorWidget: (_, _, _) => ColoredBox(color: Ui.card),
           ),
         ),
-      );
+        IgnorePointer(
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                stops: const [0, .22, .5, 1],
+                colors: [
+                  Colors.black.withValues(alpha: .7),
+                  Colors.transparent,
+                  Ui.bg.withValues(alpha: .55),
+                  Ui.bg.withValues(alpha: .96),
+                ],
+              ),
+            ),
+          ),
+        ),
+        Positioned(
+          left: 20,
+          right: 20,
+          bottom: 34,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      gradient: Ui.gradient,
+                      borderRadius: BorderRadius.circular(99),
+                    ),
+                    child: Text(
+                        trending
+                            ? '#${index + 1} ${'Trending Today'.tr}'
+                            : 'Featured'.tr,
+                        style: TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w800,
+                            color: Ui.palette.onAccent)),
+                  ),
+                  if (m.rating != null) ...[
+                    const SizedBox(width: 8),
+                    RatingPill(m.rating!),
+                  ],
+                ],
+              ),
+              const SizedBox(height: 10),
+              Text(m.title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 34,
+                      height: 1.04,
+                      letterSpacing: -.8,
+                      fontWeight: FontWeight.w900,
+                      shadows: shadow)),
+              if (genres.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Text(genres,
+                    style: TextStyle(
+                        fontSize: 13,
+                        color: Colors.white.withValues(alpha: .85),
+                        fontWeight: FontWeight.w600,
+                        shadows: shadow)),
+              ],
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    flex: 11,
+                    child: GradientButton(
+                      label: 'Play'.tr,
+                      icon: Icons.play_arrow_rounded,
+                      onTap: () => _playNow(m),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    flex: 10,
+                    child: GlassButton(
+                      label: 'My List'.tr,
+                      icon: saved ? Icons.check_rounded : Icons.add_rounded,
+                      onTap: () => _toggleList(m),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  List<Widget> _rows() {
+    final lib = MovieLibrary.instance;
+    final out = <Widget>[];
+
+    void add(String title, Iterable<Movie> src,
+        {bool numbered = false, int min = 3, int max = 20}) {
+      final seen = <String>{};
+      final list = <Movie>[];
+      for (final m in src) {
+        if (!m.hasImage) continue;
+        if (seen.add(m.url)) list.add(m);
+        if (list.length >= max) break;
+      }
+      if (list.length < min) return;
+      out.add(NfRow(
+          title: title, movies: list, onTap: _details, numbered: numbered));
     }
-    return MoviePoster(movie: m);
+
+    final rank = {for (final m in _all) m.url: _dayRank(m)};
+    final ranked = [..._all]..sort((a, b) => rank[a.url]!.compareTo(rank[b.url]!));
+    final newest = _all.where((m) => m.date != null).toList()
+      ..sort((a, b) => b.date!.compareTo(a.date!));
+
+    add('Continue Watching'.tr, lib.history.map((e) => e.movie));
+    if (_trending.isNotEmpty) {
+      add('Trending Now'.tr, _trending);
+      add('Top 10 Today'.tr, _trending, numbered: true, max: 10, min: 5);
+    } else {
+      add('Popular on ${AppConfig.appName}', ranked);
+    }
+    add('My List'.tr, lib.watchLater);
+    add('New on ${AppConfig.appName}', newest);
+    add('Popular Movies'.tr, ranked.where((m) => !m.isSeries));
+    add('TV Shows'.tr, ranked.where((m) => m.isSeries));
+    for (final g in _genres.take(6)) {
+      add(g.tr, ranked.where((m) => m.genres.contains(g)), min: 4);
+    }
+    return out;
   }
-}
 
-class _Action extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-  const _Action({required this.icon, required this.label, required this.onTap});
+  // ------------------------------------------------------------- grid mode
 
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 26),
-            const SizedBox(height: 5),
-            Text(label,
-                style: TextStyle(
-                    color: Ui.muted,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600)),
-          ],
+  List<Widget> _gridSlivers(String q, double top) {
+    bool typeOk(Movie m) => _type == null || m.isSeries == (_type == 'tv');
+    bool genreOk(Movie m) => _genre == null || m.genres.contains(_genre);
+    final filtered = _all.where((m) {
+      if (!typeOk(m) || !genreOk(m)) return false;
+      return q.isEmpty || m.name.toLowerCase().contains(q);
+    }).toList();
+
+    // TMDB titles from the search box and from the selected category come
+    // after the ones in your own list.
+    final urls = {for (final m in _all) m.url};
+    final ids = {for (final m in _all) if (m.tmdbId != null) m.tmdbId};
+    void addExtra(Movie m, {required bool matchName}) {
+      if (!typeOk(m) || !genreOk(m)) return;
+      if (matchName && q.isNotEmpty && !m.name.toLowerCase().contains(q)) {
+        return;
+      }
+      if (urls.contains(m.url) || ids.contains(m.tmdbId)) return;
+      urls.add(m.url);
+      filtered.add(m);
+    }
+
+    if (q.isNotEmpty) {
+      for (final m in _found) {
+        addExtra(m, matchName: false);
+      }
+    }
+    if (_genre != null) {
+      for (final m in _discover[_genre] ?? const <Movie>[]) {
+        addExtra(m, matchName: true);
+      }
+    }
+    // Browsing (no search text): a fresh order every day. Searching keeps
+    // the best matches first.
+    if (q.isEmpty) {
+      final rank = {for (final m in filtered) m.url: _dayRank(m)};
+      filtered.sort((a, b) => rank[a.url]!.compareTo(rank[b.url]!));
+    }
+
+    return [
+      SliverToBoxAdapter(
+          child: SizedBox(height: top + (_searching ? 64 : 104))),
+      if (_loading || (filtered.isEmpty && _discovering))
+        SliverFillRemaining(
+          hasScrollBody: false,
+          child: Center(child: CircularProgressIndicator(color: Ui.red)),
+        )
+      else if (filtered.isEmpty)
+        SliverFillRemaining(
+          hasScrollBody: false,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.search_off_rounded, size: 44, color: Ui.dim),
+              const SizedBox(height: 10),
+              Text('Nothing found'.tr,
+                  style: TextStyle(
+                      color: Ui.muted,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700)),
+            ],
+          ),
+        )
+      else
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
+          sliver: SliverGrid(
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 3,
+              childAspectRatio: 2 / 3,
+              mainAxisSpacing: 12,
+              crossAxisSpacing: 12,
+            ),
+            delegate: SliverChildBuilderDelegate(
+              (context, i) => NfPoster(
+                movie: filtered[i],
+                onTap: () => _details(filtered[i]),
+              ),
+              childCount: filtered.length,
+            ),
+          ),
         ),
-      ),
-    );
-  }
-}
-
-class _RoundIcon extends StatelessWidget {
-  final IconData icon;
-  final VoidCallback onTap;
-  const _RoundIcon({required this.icon, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Colors.black.withValues(alpha: .5),
-      shape: const CircleBorder(),
-      child: InkWell(
-        customBorder: const CircleBorder(),
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(9),
-          child: Icon(icon, size: 24),
-        ),
-      ),
-    );
+    ];
   }
 }
