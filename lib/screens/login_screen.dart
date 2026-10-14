@@ -77,7 +77,7 @@ class _LoginScreenState extends State<LoginScreen>
       _error = null;
       _setupError = false;
     });
-    final r = await AuthService.instance.signIn();
+    final r = await AuthService.instance.signIn(signup: _signup);
     if (!mounted) return;
     switch (r) {
       case SignInResult.ok:
@@ -97,6 +97,15 @@ class _LoginScreenState extends State<LoginScreen>
           _busy = false;
           _setupError = true;
           _error = 'Google sign-in is not set up for this app yet.'.tr;
+        });
+        return;
+      case SignInResult.notRegistered:
+        setState(() {
+          _busy = false;
+          _signup = true; // take them to the Sign up tab
+          _error =
+              'This Gmail has not signed up yet. Sign up first, then you can log in anytime.'
+                  .tr;
         });
         return;
       case SignInResult.network:
@@ -139,12 +148,27 @@ class _LoginScreenState extends State<LoginScreen>
       ),
     );
     if (email == null || !mounted) return;
-    final ok = await AuthService.instance.signInManually(email);
+    final r = await AuthService.instance.signInManually(email, signup: _signup);
     if (!mounted) return;
-    if (ok) {
-      widget.onSignedIn();
-    } else {
-      setState(() => _error = 'Please use a Gmail account (name@gmail.com).'.tr);
+    switch (r) {
+      case SignInResult.ok:
+        widget.onSignedIn();
+        return;
+      case SignInResult.notRegistered:
+        setState(() {
+          _signup = true;
+          _error =
+              'This Gmail has not signed up yet. Sign up first, then you can log in anytime.'
+                  .tr;
+        });
+        return;
+      case SignInResult.network:
+        setState(() =>
+            _error = 'No internet connection. Check it and try again.'.tr);
+        return;
+      default:
+        setState(
+            () => _error = 'Please use a Gmail account (name@gmail.com).'.tr);
     }
   }
 
