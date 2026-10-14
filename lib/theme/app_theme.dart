@@ -23,7 +23,7 @@ class Palette {
   final Color onAccent;
 
   /// Big faint mark drawn over the whole app while this theme is selected
-  /// (null = none). Optional; no Streambox theme uses it.
+  /// (null = none). Optional; no DamiMovies theme uses it.
   final String? watermark;
 
   /// Faint black-and-white jersey stripes over the whole app.
@@ -58,7 +58,7 @@ class Palette {
 }
 
 class Palettes {
-  /// Streambox default: deep violet night with a soft purple glow.
+  /// DamiMovies default: deep violet night with a soft purple glow.
   static const violet = Palette(
     name: 'Midnight Violet',
     tagline: 'Deep violet night, soft purple glow',
