@@ -1,5 +1,5 @@
 {
-  "_help": "Streambox settings you can change without a new APK. Host this file (raw GitHub link) and put the link in AppConfig.remoteConfigUrl. A missing key = the app's built-in default. Keep it valid JSON (check commas and quotes).",
+  "_help": "DamiMovies settings you can change without a new APK. Host this file (raw GitHub link) and put the link in AppConfig.remoteConfigUrl. A missing key = the app's built-in default. Keep it valid JSON (check commas and quotes).",
 
   "ads": {
     "enabled": true,
@@ -22,7 +22,7 @@
   },
 
   "share": {
-    "message": "Get Streambox - stream, download and save movies and series",
+    "message": "Get DamiMovies - stream, download and save movies and series",
     "link": ""
   }
 }
