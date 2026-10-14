@@ -12,7 +12,10 @@ import '../utils/l10n.dart';
 import '../utils/open_movie.dart';
 import '../widgets/glass.dart';
 import '../widgets/movie_card.dart' show MoviePoster, initialsOf;
-import 'browser_screen.dart' show openInApp;
+import '../widgets/rate_this.dart';
+import '../services/download_manager.dart';
+import 'browser_screen.dart' show openInApp, isDirectFileLink;
+import 'downloads_screen.dart';
 import 'trailer_screen.dart';
 
 /// Netflix-style title page: big artwork with a play button, title, match /
@@ -96,8 +99,43 @@ class _TitlePageState extends State<TitlePage> {
     ));
   }
 
-  Future<void> _download() => openInApp(context, widget.movie.downloadUrl,
-      title: widget.movie.title, blockAds: true);
+  /// A direct file link downloads right away inside the app; anything else
+  /// (a download page) opens in the in-app browser, which picks up the file
+  /// and offers it for download as soon as it finds one.
+  Future<void> _download() async {
+    final m = widget.movie;
+    if (!isDirectFileLink(m.downloadUrl)) {
+      return openInApp(context, m.downloadUrl, title: m.title, blockAds: true);
+    }
+    final messenger = ScaffoldMessenger.of(context);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+          content: Text('Starting download…'.tr),
+          duration: const Duration(seconds: 20)));
+    final uri = Uri.tryParse(m.downloadUrl);
+    final seg = (uri?.pathSegments.isNotEmpty ?? false) ? uri!.pathSegments.last : '';
+    final dot = seg.lastIndexOf('.');
+    final ext = dot > 0 ? seg.substring(dot) : '.mp4';
+    final error = await DownloadManager.instance
+        .enqueue(m.downloadUrl, name: sanitizeFileName('${m.title}$ext'));
+    if (!mounted) return;
+    messenger.hideCurrentSnackBar();
+    if (error != null) {
+      messenger.showSnackBar(SnackBar(content: Text(error)));
+      return;
+    }
+    messenger.showSnackBar(SnackBar(
+      content: Text('Download started'.tr),
+      action: SnackBarAction(
+        label: 'VIEW',
+        textColor: Ui.redSoft,
+        onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
+          builder: (_) => const DownloadsScreen(),
+        )),
+      ),
+    ));
+  }
 
   Future<void> _share() async {
     final box = context.findRenderObject() as RenderBox?;
@@ -206,6 +244,8 @@ class _TitlePageState extends State<TitlePage> {
                           directors.take(3).join(', ')),
                     const SizedBox(height: 14),
                     _actionRow(),
+                    const SizedBox(height: 20),
+                    RateThis(movie: m),
                   ],
                 ),
               ),
