@@ -10,6 +10,12 @@ class AppConfig {
   static const googleServerClientId =
       String.fromEnvironment('GOOGLE_SERVER_CLIENT_ID');
 
+  /// While Google sign-in is not set up yet (see AUTH.md), the login page
+  /// offers "Enter your Gmail address instead" after a setup error, so you can
+  /// still get into the app. The address is only checked to end in @gmail.com
+  /// (it is NOT verified by Google). Set to false once sign-in works.
+  static const allowGmailFallback = true;
+
   /// Turn the login page off (anyone can enter) while testing.
   static const loginRequired = true;
 
