@@ -26,8 +26,10 @@ class RatingService extends ChangeNotifier {
   static final RatingService instance = RatingService._();
 
   static const _kMine = 'user_ratings_v1';
+  static const _kMovies = 'user_rating_movies_v1';
 
   final Map<String, int> _mine = {};
+  final Map<String, Movie> _movies = {}; // the rated titles, for the profile
   final Map<String, CommunityRating> _community = {};
   Future<void>? _loading;
 
@@ -50,8 +52,28 @@ class RatingService extends ChangeNotifier {
           });
         }
       }
+      final rawMovies = (await SharedPreferences.getInstance()).getString(_kMovies);
+      if (rawMovies != null) {
+        final j = jsonDecode(rawMovies);
+        if (j is Map) {
+          j.forEach((k, v) {
+            final m = Movie.tryParse(v);
+            if (m != null) _movies['$k'] = m;
+          });
+        }
+      }
     } catch (_) {}
     notifyListeners();
+  }
+
+  /// Everything you rated, newest first, with your stars.
+  List<(Movie, int)> get ratedMovies {
+    final out = <(Movie, int)>[];
+    for (final e in _mine.entries.toList().reversed) {
+      final m = _movies[e.key];
+      if (m != null) out.add((m, e.value));
+    }
+    return out;
   }
 
   /// Your stars for [m]: 1-5, or 0 when you have not rated it.
@@ -61,8 +83,10 @@ class RatingService extends ChangeNotifier {
 
   Future<void> _saveMine() async {
     try {
-      await (await SharedPreferences.getInstance())
-          .setString(_kMine, jsonEncode(_mine));
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_kMine, jsonEncode(_mine));
+      await prefs.setString(_kMovies,
+          jsonEncode({for (final e in _movies.entries) e.key: e.value.toJson()}));
     } catch (_) {}
   }
 
@@ -79,10 +103,12 @@ class RatingService extends ChangeNotifier {
   Future<void> rate(Movie m, int stars) async {
     await load();
     final key = keyOf(m);
+    _mine.remove(key); // re-rating moves the title to the top of the list
     if (stars <= 0) {
-      _mine.remove(key);
+      _movies.remove(key);
     } else {
       _mine[key] = stars.clamp(1, 5);
+      _movies[key] = m;
     }
     notifyListeners();
     await _saveMine();
