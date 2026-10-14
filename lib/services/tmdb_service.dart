@@ -410,6 +410,46 @@ class TmdbService {
         .whereType<Movie>()
         .toList();
   }
+
+  /// Searches people (for Favorite people in the profile).
+  Future<List<TmdbPerson>> searchPeople(String query) async {
+    final q = query.trim();
+    if (q.length < 2) return const [];
+    final d = await _get('/search/person', {'query': q, 'include_adult': 'false'});
+    if (d is! Map || d['results'] is! List) return const [];
+    final out = <TmdbPerson>[];
+    for (final r in d['results'] as List) {
+      if (r is! Map || r['id'] is! int) continue;
+      final name = '${r['name'] ?? ''}'.trim();
+      if (name.isEmpty) continue;
+      final path = '${r['profile_path'] ?? ''}';
+      final known = <String>[];
+      if (r['known_for'] is List) {
+        for (final k in r['known_for'] as List) {
+          if (k is Map) {
+            final t = '${k['title'] ?? k['name'] ?? ''}'.trim();
+            if (t.isNotEmpty) known.add(t);
+          }
+        }
+      }
+      out.add(TmdbPerson(
+        r['id'] as int,
+        name,
+        path.isEmpty ? '' : 'https://image.tmdb.org/t/p/w185$path',
+        known.take(3).join(', '),
+      ));
+    }
+    return out;
+  }
+}
+
+/// A person found on TMDB (actor, director...).
+class TmdbPerson {
+  final int id;
+  final String name;
+  final String photo;
+  final String knownFor;
+  const TmdbPerson(this.id, this.name, this.photo, this.knownFor);
 }
 
 class _Target {
