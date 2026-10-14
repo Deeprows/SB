@@ -7,7 +7,6 @@ import 'package:webview_flutter_android/webview_flutter_android.dart';
 import '../models/movie_info.dart';
 import '../theme/app_theme.dart';
 import '../utils/l10n.dart';
-import '../widgets/glass.dart';
 
 /// Plays a TMDB trailer (a YouTube video) inside the app. Tapping the
 /// thumbnails below switches to another video; "Open in YouTube" is the
