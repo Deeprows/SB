@@ -5,6 +5,7 @@ import '../services/download_manager.dart';
 import '../theme/app_theme.dart';
 import '../utils/format.dart';
 import 'browser_screen.dart';
+import 'local_player_screen.dart';
 
 IconData _iconFor(String ext) {
   switch (ext) {
@@ -127,7 +128,19 @@ class _TaskTile extends StatelessWidget {
 
   DownloadManager get _m => DownloadManager.instance;
 
+  static const _videoExt = {'mp4', 'm4v', 'mkv', 'webm', 'mov', 'avi', '3gp', 'ts'};
+
   Future<void> _open(BuildContext context) async {
+    // Videos play inside the app.
+    if (_videoExt.contains(task.extension)) {
+      final path = await _m.localPath(task.id);
+      if (path != null && context.mounted) {
+        await Navigator.of(context).push(MaterialPageRoute<void>(
+          builder: (_) => LocalPlayerScreen(path: path, title: task.name),
+        ));
+        return;
+      }
+    }
     final ok = await _m.open(task.id);
     if (!ok && context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
