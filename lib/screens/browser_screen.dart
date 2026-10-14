@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
@@ -7,6 +10,7 @@ import '../config.dart';
 import '../services/ad_shield.dart';
 import '../services/download_manager.dart';
 import '../theme/app_theme.dart';
+import '../widgets/glass.dart';
 import 'downloads_screen.dart';
 
 /// File links (apk, zip, mkv…) can't be saved by a WebView, so when a page
@@ -88,6 +92,12 @@ class _BrowserScreenState extends State<BrowserScreen> {
   String _url = '';
   String _pageTitle = '';
 
+  // Video files found on the page (video tags, direct links) are offered
+  // with a Download button so they can be saved by the in-app downloader.
+  final List<String> _found = [];
+  Timer? _sniffTimer;
+  int _sniffRuns = 0;
+
   // Ad-redirect blocking.
   bool _blockOn = true;
   bool _firstLoadDone = false;
@@ -111,6 +121,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
           setState(() {
             _url = u;
             _error = false;
+            _found.clear();
           });
         },
         onProgress: (p) {
@@ -123,6 +134,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
           final back = await _wc.canGoBack();
           if (!mounted) return;
           _firstLoadDone = true;
+          _startSniff();
           setState(() {
             _url = u;
             _pageTitle = title ?? '';
@@ -155,6 +167,12 @@ class _BrowserScreenState extends State<BrowserScreen> {
     }
 
     _wc.loadRequest(Uri.parse(widget.url));
+  }
+
+  @override
+  void dispose() {
+    _sniffTimer?.cancel();
+    super.dispose();
   }
 
   NavigationDecision _onNavigation(NavigationRequest r) {
@@ -192,6 +210,85 @@ class _BrowserScreenState extends State<BrowserScreen> {
   /// Blocked redirects are dropped silently (no notification). The shield
   /// icon in the menu still lets you allow redirects for this page.
   void _noteBlocked(Uri uri) {}
+
+  static const _sniffJs = r'''(function(){var out=[];
+var re=/\.(mp4|mkv|webm|mov|m4v|avi|3gp)(\?|#|$)/i;
+function add(u){try{if(!u)return;u=new URL(u,location.href).href;
+if(/^https?:/.test(u)&&out.indexOf(u)<0)out.push(u);}catch(e){}}
+document.querySelectorAll('video[src],video source[src]').forEach(function(e){add(e.getAttribute('src'));});
+document.querySelectorAll('a[href]').forEach(function(a){var h=a.getAttribute('href');
+if(h&&(re.test(h)||a.hasAttribute('download')))add(h);});
+return JSON.stringify(out.slice(0,12));})()''';
+
+  /// Looks for video files on the page for a while after it loads (download
+  /// pages often reveal the real link only after a countdown or a click).
+  void _startSniff() {
+    _sniffTimer?.cancel();
+    _sniffRuns = 0;
+    _sniffOnce();
+    _sniffTimer = Timer.periodic(const Duration(seconds: 2), (t) {
+      if (!mounted || ++_sniffRuns > 30) {
+        t.cancel();
+        return;
+      }
+      _sniffOnce();
+    });
+  }
+
+  Future<void> _sniffOnce() async {
+    try {
+      var r = (await _wc.runJavaScriptReturningResult(_sniffJs)).toString();
+      if (r.startsWith('"')) r = jsonDecode(r) as String;
+      final list = (jsonDecode(r) as List).map((e) => '$e').toList();
+      var changed = false;
+      for (final u in list) {
+        if (!_found.contains(u)) {
+          _found.add(u);
+          changed = true;
+        }
+      }
+      if (changed && mounted) setState(() {});
+    } catch (_) {}
+  }
+
+  void _offerFound() {
+    if (_found.length == 1) {
+      _startDownload(_found.first);
+      return;
+    }
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Ui.panel,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(4, 0, 4, 10),
+              child: Text('Pick a file to download',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
+            ),
+            for (final u in _found)
+              ListTile(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+                leading: const Icon(Icons.movie_rounded),
+                title: Text(fileNameFromUrl(u),
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
+                subtitle: Text(Uri.tryParse(u)?.host ?? '',
+                    style: TextStyle(color: Ui.dim, fontSize: 12)),
+                trailing: const Icon(Icons.download_rounded),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _startDownload(u);
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
 
   void _shield() {
     if (widget.blockAds && _blockOn) {
@@ -419,6 +516,19 @@ class _BrowserScreenState extends State<BrowserScreen> {
                 child: Stack(
                   children: [
                     WebViewWidget(controller: _wc),
+                    if (_found.isNotEmpty && !_error)
+                      Positioned(
+                        left: 16,
+                        right: 16,
+                        bottom: 16,
+                        child: GradientButton(
+                          label: _found.length == 1
+                              ? 'Download video'
+                              : 'Download video (${_found.length})',
+                          icon: Icons.download_rounded,
+                          onTap: _offerFound,
+                        ),
+                      ),
                     if (_error)
                       Container(
                         color: Ui.bg,
