@@ -31,7 +31,7 @@ The first screen is a login page: a moving wall of movie posters (taken from
 ## One-time Google setup (needed, or the button shows "Could not sign in")
 
 1. Google Cloud Console -> create / pick a project.
-2. **APIs & Services -> OAuth consent screen**: app name Streambox, your
+2. **APIs & Services -> OAuth consent screen**: app name DamiMovies, your
    support email. Choose *External*, then **Publish app** (while it is in
    "Testing", only the test users you add can sign in).
 3. **APIs & Services -> Credentials -> Create credentials -> OAuth client ID
