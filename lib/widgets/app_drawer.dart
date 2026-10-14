@@ -24,8 +24,8 @@ void _toast(BuildContext c, String msg) =>
 /// Side menu: Premium / Remove ads, Downloads, Library, Themes, Language,
 /// Floating Player, Video Quality, Notice, Join Us, Copyright, Share App,
 /// Update App, Exit.
-class StreamboxDrawer extends StatelessWidget {
-  const StreamboxDrawer({super.key});
+class DamiMoviesDrawer extends StatelessWidget {
+  const DamiMoviesDrawer({super.key});
 
   void _go(BuildContext context, Future<void> Function(BuildContext) action) {
     final nav = Navigator.of(context);
@@ -339,7 +339,7 @@ Future<void> showCopyrightDialog(BuildContext context) {
     builder: (ctx) => AlertDialog(
       title: Text('Copyright Alert'.tr),
       content: Text(
-          'Streambox does not host, upload or own any of the movies, '
+          'DamiMovies does not host, upload or own any of the movies, '
                   'series or videos shown in this application. All content is the '
                   'copyright of its respective owners, and you are responsible for '
                   'making sure you have the right to watch what you play.'
