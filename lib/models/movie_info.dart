@@ -13,6 +13,24 @@ class CastMember {
   bool get hasPhoto => photo.startsWith('http');
 }
 
+/// A YouTube video (trailer, teaser, clip...) TMDB lists for a title.
+class Trailer {
+  final String key; // YouTube video id
+  final String name;
+  final String type; // Trailer, Teaser, Clip, Featurette...
+  final bool official;
+
+  const Trailer({
+    required this.key,
+    required this.name,
+    required this.type,
+    required this.official,
+  });
+
+  String get thumbnail => 'https://i.ytimg.com/vi/$key/hqdefault.jpg';
+  String get watchUrl => 'https://www.youtube.com/watch?v=$key';
+}
+
 /// Extra details for one title, fetched from TMDB.
 class MovieInfo {
   final bool isSeries;
@@ -28,6 +46,7 @@ class MovieInfo {
   final List<String> genres;
   final List<String> directors; // directors, or creators for a series
   final List<CastMember> cast;
+  final List<Trailer> trailers; // best first (official trailer on top)
 
   const MovieInfo({
     required this.isSeries,
@@ -43,6 +62,7 @@ class MovieInfo {
     required this.genres,
     required this.directors,
     required this.cast,
+    this.trailers = const [],
   });
 
   /// "1h 44m", "45m", or '' when unknown.
@@ -54,6 +74,9 @@ class MovieInfo {
     if (h == 0) return '${m}m';
     return m == 0 ? '${h}h' : '${h}h ${m}m';
   }
+
+  /// The best trailer TMDB has, or null.
+  Trailer? get mainTrailer => trailers.isEmpty ? null : trailers.first;
 
   bool get hasContent =>
       overview.isNotEmpty || cast.isNotEmpty || directors.isNotEmpty;
@@ -120,6 +143,36 @@ class MovieInfo {
       }
     }
 
+    // TMDB `videos` (append_to_response=videos): YouTube only, trailers first.
+    final trailers = <Trailer>[];
+    final vids = j['videos'];
+    if (vids is Map && vids['results'] is List) {
+      for (final v in vids['results'] as List) {
+        if (v is! Map) continue;
+        final key = (v['key'] ?? '').toString();
+        if (key.isEmpty || v['site'] != 'YouTube') continue;
+        trailers.add(Trailer(
+          key: key,
+          name: (v['name'] ?? '').toString(),
+          type: (v['type'] ?? '').toString(),
+          official: v['official'] == true,
+        ));
+      }
+      int rank(Trailer t) {
+        final base = switch (t.type) {
+          'Trailer' => 0,
+          'Teaser' => 2,
+          'Clip' => 4,
+          'Featurette' => 5,
+          _ => 6,
+        };
+        return base + (t.official ? 0 : 1);
+      }
+
+      trailers.sort((a, b) => rank(a).compareTo(rank(b)));
+      if (trailers.length > 8) trailers.removeRange(8, trailers.length);
+    }
+
     return MovieInfo(
       isSeries: tv,
       overview: s('overview'),
@@ -140,6 +193,7 @@ class MovieInfo {
       genres: genres.expand(_genreNames).toSet().toList(),
       directors: directors.toSet().toList(),
       cast: cast,
+      trailers: trailers,
     );
   }
 
