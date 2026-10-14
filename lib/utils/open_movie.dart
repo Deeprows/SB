@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/movie.dart';
 import '../screens/player_screen.dart';
-import '../screens/title_screen.dart';
+import '../screens/title_page.dart';
 
 /// Opens the player page for a movie or series.
 void openMoviePlayer(BuildContext context, Movie m) {
@@ -25,6 +25,6 @@ void openMoviePlayer(BuildContext context, Movie m) {
 /// More Like This) for a movie or series.
 void openMovieTitle(BuildContext context, Movie m) {
   Navigator.of(context).push(MaterialPageRoute<void>(
-    builder: (_) => TitleScreen(movie: m),
+    builder: (_) => TitlePage(movie: m),
   ));
 }
