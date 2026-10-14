@@ -12,6 +12,7 @@ import '../utils/l10n.dart';
 import '../utils/open_movie.dart';
 import '../widgets/glass.dart';
 import '../widgets/movie_card.dart' show MoviePoster, initialsOf;
+import '../widgets/profile_sheets.dart';
 import '../widgets/rate_this.dart';
 import '../services/download_manager.dart';
 import 'browser_screen.dart' show openInApp, isDirectFileLink;
@@ -655,7 +656,9 @@ class _TitlePageState extends State<TitlePage> {
 
   /// My List / Share as round glass buttons with a label underneath.
   Widget _actionRow() {
-    return Row(
+    return Wrap(
+      spacing: 18,
+      runSpacing: 14,
       children: [
         ListenableBuilder(
           listenable: MovieLibrary.instance,
@@ -669,7 +672,18 @@ class _TitlePageState extends State<TitlePage> {
             );
           },
         ),
-        const SizedBox(width: 22),
+        _Action(
+            icon: Icons.format_list_bulleted_rounded,
+            label: 'Lists'.tr,
+            onTap: () => showAddToListSheet(context, widget.movie)),
+        _Action(
+            icon: Icons.rate_review_outlined,
+            label: 'Review'.tr,
+            onTap: () => showReviewDialog(context, widget.movie)),
+        _Action(
+            icon: Icons.check_circle_outline_rounded,
+            label: 'Check in'.tr,
+            onTap: () => doCheckIn(context, widget.movie)),
         _Action(icon: Icons.ios_share_rounded, label: 'Share'.tr, onTap: _share),
       ],
     );
