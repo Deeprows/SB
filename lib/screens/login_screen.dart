@@ -361,7 +361,7 @@ class _LoginScreenState extends State<LoginScreen>
           ),
           const SizedBox(height: 14),
           Text(
-            'By continuing you agree that Streambox does not host any movies. '
+            'By continuing you agree that DamiMovies does not host any movies. '
                     'All content belongs to its owners.'
                 .tr,
             textAlign: TextAlign.center,
