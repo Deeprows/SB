@@ -33,6 +33,9 @@ class MoviesScreen extends StatefulWidget {
 class _MoviesScreenState extends State<MoviesScreen> {
   List<Movie> _all = const [];
   List<Movie> _trending = const []; // TMDB trending, most popular first
+  List<Movie> _popMovies = const []; // TMDB popular movies
+  List<Movie> _popTv = const []; // TMDB popular series
+  bool _homeRowsBusy = false;
   bool _loading = true;
   String _query = '';
   String? _genre;
@@ -66,7 +69,7 @@ class _MoviesScreenState extends State<MoviesScreen> {
     final next = DateTime(n.year, n.month, n.day + 1, 0, 0, 2);
     _midnight = Timer(next.difference(n), () {
       if (!mounted) return;
-      setState(() => _dayKey = _today());
+      _newDay();
       _armMidnight();
     });
   }
@@ -88,6 +91,7 @@ class _MoviesScreenState extends State<MoviesScreen> {
       if (AppConfig.moviesUrl.isNotEmpty) _load(remote: true);
     });
     _loadTrending();
+    _loadPopular();
     ContentSync.tick.addListener(_onSync);
     AppLocale.notifier.addListener(_onLanguage);
     MovieLibrary.instance
@@ -114,7 +118,7 @@ class _MoviesScreenState extends State<MoviesScreen> {
 
   void _onSync() {
     // Coming back to the app after midnight: pick up the new day's order.
-    if (_dayKey != _today()) setState(() => _dayKey = _today());
+    if (_dayKey != _today()) _newDay();
     if (_loading) {
       Future<void>.delayed(const Duration(seconds: 2), () {
         if (mounted && !_loading) _load(remote: true);
@@ -122,6 +126,18 @@ class _MoviesScreenState extends State<MoviesScreen> {
       return;
     }
     _load(remote: true);
+    _loadTrending();
+    _loadPopular();
+  }
+
+  /// A new day: new shuffle and a fresh copy of every TMDB list.
+  void _newDay() {
+    setState(() => _dayKey = _today());
+    _discover.clear();
+    _loadTrending(force: true);
+    _loadPopular(force: true);
+    _fetchHomeRows();
+    if (_genre != null) _fetchDiscover();
   }
 
   /// New app language: reload so titles and descriptions follow it.
@@ -130,7 +146,8 @@ class _MoviesScreenState extends State<MoviesScreen> {
     if (_genre != null) _fetchDiscover();
     if (_query.trim().length >= 2) _onQuery(_query);
     _load().then((_) => _load(remote: true));
-    _loadTrending();
+    _loadTrending(force: true);
+    _loadPopular(force: true);
   }
 
   @override
@@ -154,15 +171,58 @@ class _MoviesScreenState extends State<MoviesScreen> {
       _all = list;
       _loading = false;
     });
+    _fetchHomeRows();
+  }
+
+  /// Saved copy first (instant), then TMDB's live popular movies + series.
+  Future<void> _loadPopular({bool force = false}) async {
+    if (!TmdbService.enabled) return;
+    try {
+      final m = await tmdb.popular(tv: false, fetch: false);
+      final t = await tmdb.popular(tv: true, fetch: false);
+      if (mounted && (m.isNotEmpty || t.isNotEmpty)) {
+        setState(() {
+          if (m.isNotEmpty) _popMovies = m;
+          if (t.isNotEmpty) _popTv = t;
+        });
+      }
+      final fm = await tmdb.popular(tv: false, force: force);
+      final ft = await tmdb.popular(tv: true, force: force);
+      if (mounted) {
+        setState(() {
+          if (fm.isNotEmpty) _popMovies = fm;
+          if (ft.isNotEmpty) _popTv = ft;
+        });
+      }
+    } catch (_) {}
+  }
+
+  /// Fills the home category rows (the first six categories) with TMDB's
+  /// popular titles of that category. Rows keep your own list until the
+  /// TMDB titles arrive, or when TMDB can't be reached.
+  Future<void> _fetchHomeRows() async {
+    if (_homeRowsBusy) return;
+    if (!AppConfig.tmdbCategories || !TmdbService.enabled) return;
+    _homeRowsBusy = true;
+    try {
+      for (final g in _genres.take(6)) {
+        if (_discover.containsKey(g)) continue;
+        final res = await tmdb.discover(g);
+        if (!mounted) return;
+        if (res.isNotEmpty) setState(() => _discover[g] = res);
+      }
+    } finally {
+      _homeRowsBusy = false;
+    }
   }
 
   /// Saved copy first (instant), then a fresh one.
-  Future<void> _loadTrending() async {
+  Future<void> _loadTrending({bool force = false}) async {
     if (!TmdbService.enabled || !AppConfig.tmdbTrending) return;
     try {
       final cached = await tmdb.trending(fetch: false);
       if (mounted && cached.isNotEmpty) setState(() => _trending = cached);
-      final fresh = await tmdb.trending();
+      final fresh = await tmdb.trending(force: force);
       if (mounted && fresh.isNotEmpty) setState(() => _trending = fresh);
     } catch (_) {}
   }
@@ -261,7 +321,8 @@ class _MoviesScreenState extends State<MoviesScreen> {
           onRefresh: () async {
             _discover.clear();
             await _load(remote: true);
-            await _loadTrending();
+            await _loadTrending(force: true);
+            await _loadPopular(force: true);
             await _fetchDiscover(force: true);
             return !feed.lastRemoteFailed;
           },
@@ -762,10 +823,19 @@ class _MoviesScreenState extends State<MoviesScreen> {
     }
     add('My List'.tr, lib.watchLater);
     add('New on ${AppConfig.appName}', newest);
-    add('Popular Movies'.tr, ranked.where((m) => !m.isSeries));
-    add('TV Shows'.tr, ranked.where((m) => m.isSeries));
+    // Popular and category rows come from TMDB's live lists; your own list
+    // is the fallback while they load or when TMDB can't be reached.
+    add('Popular Movies'.tr,
+        _popMovies.isNotEmpty ? _popMovies : ranked.where((m) => !m.isSeries));
+    add('TV Shows'.tr,
+        _popTv.isNotEmpty ? _popTv : ranked.where((m) => m.isSeries));
     for (final g in _genres.take(6)) {
-      add(g.tr, ranked.where((m) => m.genres.contains(g)), min: 4);
+      final live = _discover[g];
+      add(g.tr,
+          (live != null && live.isNotEmpty)
+              ? live
+              : ranked.where((m) => m.genres.contains(g)),
+          min: 4);
     }
     return out;
   }
