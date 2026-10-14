@@ -28,7 +28,7 @@ class NfPoster extends StatelessWidget {
       art = CachedNetworkImage(
         imageUrl: movie.image,
         fit: BoxFit.cover,
-        memCacheWidth: 360,
+        memCacheWidth: 480,
         fadeInDuration: const Duration(milliseconds: 220),
         placeholder: (_, _) => ColoredBox(color: Ui.card),
         errorWidget: (_, _, _) => _fallback(),
@@ -103,8 +103,8 @@ class NfRow extends StatelessWidget {
     this.numbered = false,
   });
 
-  static const posterW = 118.0;
-  static const posterH = 177.0;
+  static const posterW = 140.0;
+  static const posterH = 210.0;
 
   @override
   Widget build(BuildContext context) {
