@@ -10,6 +10,7 @@ import '../services/notice_service.dart';
 import '../theme/app_theme.dart';
 import '../utils/l10n.dart';
 import '../widgets/app_drawer.dart';
+import '../widgets/glass.dart';
 import 'browse_screen.dart';
 import 'downloads_screen.dart';
 import 'library_screen.dart';
@@ -106,73 +107,134 @@ class _ShellScreenState extends State<ShellScreen>
             LibraryScreen(),
           ],
         ),
-        bottomNavigationBar: DecoratedBox(
-          decoration: BoxDecoration(
-            border: Border(top: BorderSide(color: Ui.line)),
-          ),
-          child: NavigationBarTheme(
-            data: NavigationBarThemeData(
-              backgroundColor: Ui.bg,
-              surfaceTintColor: Colors.transparent,
-              indicatorColor: Colors.transparent,
-              height: 62,
-              iconTheme: WidgetStateProperty.resolveWith((st) => IconThemeData(
-                    size: 26,
-                    color: st.contains(WidgetState.selected)
-                        ? Colors.white
-                        : Ui.dim,
-                  )),
-              labelTextStyle: WidgetStateProperty.resolveWith((st) => TextStyle(
-                    fontSize: 10.5,
-                    fontWeight: FontWeight.w600,
-                    color: st.contains(WidgetState.selected)
-                        ? Colors.white
-                        : Ui.dim,
-                  )),
+        bottomNavigationBar: _FloatingNav(
+          index: _index,
+          onTap: (i) => setState(() => _index = i),
+          items: [
+            _NavItem(Icons.home_outlined, Icons.home_rounded, 'Home'.tr),
+            _NavItem(Icons.public_outlined, Icons.public_rounded, 'Browser'.tr),
+            _NavItem(
+              Icons.download_outlined,
+              Icons.download_rounded,
+              'Downloads'.tr,
+              badge: DownloadManager.instance,
+              count: () => DownloadManager.instance.activeCount,
             ),
-            child: NavigationBar(
-            selectedIndex: _index,
-            onDestinationSelected: (i) => setState(() => _index = i),
-            destinations: [
-              NavigationDestination(
-                icon: const Icon(Icons.home_outlined),
-                selectedIcon: const Icon(Icons.home_filled),
-                label: 'Home'.tr,
-              ),
-              NavigationDestination(
-                icon: const Icon(Icons.public_outlined),
-                selectedIcon: const Icon(Icons.public_rounded),
-                label: 'Browser'.tr,
-              ),
-              NavigationDestination(
-                icon: ListenableBuilder(
-                  listenable: DownloadManager.instance,
-                  builder: (_, _) => Badge(
-                    isLabelVisible: DownloadManager.instance.activeCount > 0,
-                    label: Text('${DownloadManager.instance.activeCount}'),
-                    backgroundColor: Ui.red,
-                    child: const Icon(Icons.download_outlined),
-                  ),
+            _NavItem(
+              Icons.bookmark_border_rounded,
+              Icons.bookmark_rounded,
+              'Library'.tr,
+              badge: MovieLibrary.instance,
+              count: () => MovieLibrary.instance.watchLater.length,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _NavItem {
+  final IconData icon;
+  final IconData selectedIcon;
+  final String label;
+  final Listenable? badge;
+  final int Function()? count;
+  const _NavItem(this.icon, this.selectedIcon, this.label,
+      {this.badge, this.count});
+}
+
+/// Floating glass tab bar: the chosen tab grows into an accent-gradient pill
+/// with its label; the others show just their icon.
+class _FloatingNav extends StatelessWidget {
+  final int index;
+  final ValueChanged<int> onTap;
+  final List<_NavItem> items;
+  const _FloatingNav(
+      {required this.index, required this.onTap, required this.items});
+
+  @override
+  Widget build(BuildContext context) {
+    final bottom = MediaQuery.of(context).padding.bottom;
+    return Container(
+      color: Ui.bg,
+      padding: EdgeInsets.fromLTRB(14, 6, 14, bottom > 0 ? bottom : 10),
+      child: Glass(
+        radius: 26,
+        blur: 20,
+        tint: Ui.card.withValues(alpha: .85),
+        padding: const EdgeInsets.all(6),
+        child: Row(
+          children: [
+            for (var i = 0; i < items.length; i++)
+              Expanded(flex: i == index ? 21 : 10, child: _tab(i)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _tab(int i) {
+    final it = items[i];
+    final on = i == index;
+    Widget icon(bool on) {
+      final w = Icon(on ? it.selectedIcon : it.icon,
+          size: 24, color: on ? Ui.palette.onAccent : Ui.muted);
+      if (it.badge == null) return w;
+      return ListenableBuilder(
+        listenable: it.badge!,
+        builder: (_, _) {
+          final n = it.count!();
+          return Badge(
+            isLabelVisible: n > 0 && !on,
+            label: Text('$n'),
+            backgroundColor: Ui.red,
+            child: w,
+          );
+        },
+      );
+    }
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () {
+        HapticFeedback.selectionClick();
+        onTap(i);
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOutCubic,
+        height: 46,
+        decoration: BoxDecoration(
+          gradient: on ? Ui.gradient : null,
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: on
+              ? [
+                  BoxShadow(
+                      color: Ui.red.withValues(alpha: .4),
+                      blurRadius: 14,
+                      offset: const Offset(0, 4))
+                ]
+              : null,
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            icon(on),
+            if (on)
+              Flexible(
+                child: Padding(
+                  padding: const EdgeInsets.only(left: 6),
+                  child: Text(it.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.clip,
+                      style: TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w800,
+                          color: Ui.palette.onAccent)),
                 ),
-                selectedIcon: const Icon(Icons.download_rounded),
-                label: 'Downloads'.tr,
               ),
-              NavigationDestination(
-                icon: ListenableBuilder(
-                  listenable: MovieLibrary.instance,
-                  builder: (_, _) => Badge(
-                    isLabelVisible: MovieLibrary.instance.watchLater.isNotEmpty,
-                    label: Text('${MovieLibrary.instance.watchLater.length}'),
-                    backgroundColor: Ui.red,
-                    child: const Icon(Icons.bookmark_border_rounded),
-                  ),
-                ),
-                selectedIcon: const Icon(Icons.bookmark_rounded),
-                label: 'Library'.tr,
-              ),
-            ],
-          ),
-          ),
+          ],
         ),
       ),
     );
