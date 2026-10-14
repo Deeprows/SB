@@ -8,7 +8,7 @@ import 'downloads_screen.dart';
 
 /// The Browse tab: type a web address or a search and it opens in the in-app
 /// browser. Files that a page hands over (mkv, mp4, zip, apk, pdf...) are
-/// saved by the in-app download manager, so nothing leaves Streambox.
+/// saved by the in-app download manager, so nothing leaves DamiMovies.
 class BrowseScreen extends StatefulWidget {
   const BrowseScreen({super.key});
 
@@ -83,7 +83,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
           ],
         ),
         const SizedBox(height: 4),
-        Text('Browse the web and download files without leaving Streambox.'.tr,
+        Text('Browse the web and download files without leaving DamiMovies.'.tr,
             style: TextStyle(color: Ui.muted, fontSize: 14, height: 1.3)),
         const SizedBox(height: 18),
         DecoratedBox(
