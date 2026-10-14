@@ -207,6 +207,14 @@ class AdShield {
   try{
     if(window.__dwLight)return;
     window.__dwLight=1;
+    // Pop-ups from the page are dropped, but the address is handed to the
+    // app first: when it is the real file, the app downloads it.
+    window.open=function(u){
+      try{
+        if(u&&window.SBBridge){SBBridge.postMessage(new URL(u,location.href).href)}
+      }catch(e){}
+      return null;
+    };
     var BAD=/(doubleclick|googlesyndication|googleadservices|adnxs|adsterra|propellerads|popads|popcash|exoclick|exosrv|juicyads|trafficjunky|clickadu|hilltopads|adcash|taboola|outbrain|mgid\.com|criteo|onclickads|onclkds|profitablecpmrate|highperformanceformat|effectivegatecpm|a-ads\.com|admaven|ad-maven|monetag|richpush|bidvertiser|tsyndicate|exdynsrv)/i;
     function sweep(){
       try{
