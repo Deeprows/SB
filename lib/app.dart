@@ -8,8 +8,8 @@ import 'services/locale_service.dart';
 import 'theme/app_theme.dart';
 import 'theme/theme_watermark.dart';
 
-class StreamboxApp extends StatelessWidget {
-  const StreamboxApp({super.key});
+class DamiMoviesApp extends StatelessWidget {
+  const DamiMoviesApp({super.key});
 
   @override
   Widget build(BuildContext context) {
