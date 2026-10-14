@@ -73,7 +73,7 @@ class PlaybackService : Service() {
     private var wake: PowerManager.WakeLock? = null
     private var wifi: WifiManager.WifiLock? = null
     private var session: MediaSession? = null
-    private var title: String = "Streambox"
+    private var title: String = "DamiMovies"
     private var playing: Boolean = true
 
     /** Keeps the CPU and Wi-Fi awake while the screen is off, otherwise the stream stalls. */
@@ -177,7 +177,7 @@ class PlaybackService : Service() {
             s.setMetadata(
                 MediaMetadata.Builder()
                     .putString(MediaMetadata.METADATA_KEY_TITLE, title)
-                    .putString(MediaMetadata.METADATA_KEY_ARTIST, "Streambox")
+                    .putString(MediaMetadata.METADATA_KEY_ARTIST, "DamiMovies")
                     .build()
             )
             s.setPlaybackState(
@@ -206,7 +206,7 @@ class PlaybackService : Service() {
             ACTION_REWIND -> { act("rewind"); return START_NOT_STICKY }
             ACTION_FORWARD -> { act("forward"); return START_NOT_STICKY }
         }
-        title = intent?.getStringExtra("title") ?: "Streambox"
+        title = intent?.getStringExtra("title") ?: "DamiMovies"
         playing = intent?.getBooleanExtra("playing", true) ?: true
         lock()
         updateSession()
@@ -317,7 +317,7 @@ if "setupPlayback" not in src:
                     var ok = true
                     try {
                         val i = Intent(this, PlaybackService::class.java)
-                            .putExtra("title", call.argument<String>("title") ?: "Streambox")
+                            .putExtra("title", call.argument<String>("title") ?: "DamiMovies")
                             .putExtra("playing", call.argument<Boolean>("playing") ?: true)
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(i)
                         else startService(i)
