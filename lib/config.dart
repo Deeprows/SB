@@ -199,7 +199,7 @@ class AppConfig {
   ///                  {downloadBase}/tv/{tmdb id}
   static const downloadBase = 'https://web.nxsha.app/dl';
 
-  /// Adds TMDB's trending movies + series (about 40 titles) after the titles
+  /// Adds TMDB's trending-today movies + series (about 40 titles) after the titles
   /// listed in `movies.json`. Set to false to show only your own list.
   static const tmdbTrending = true;
 
