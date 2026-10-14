@@ -16,7 +16,8 @@ class TmdbService {
   static bool get enabled => AppConfig.tmdbApiKey.isNotEmpty;
 
   static const _detailsKey = 'cache_tmdb_details';
-  static const _trendingKey = 'cache_tmdb_trending';
+  static const _trendingKey = 'cache_tmdb_trending_day';
+  static const _trendingAtKey = 'cache_tmdb_trending_day_at';
   static const _postersKey = 'cache_tmdb_posters';
 
   static const _genres = <int, String>{
@@ -183,26 +184,82 @@ class TmdbService {
     return fromJson(cache[key], type: tv ? 'tv' : 'movie');
   }
 
-  /// Trending movies + series this week (about 40). Without [fetch] only the
-  /// last saved copy is returned, so the first paint never waits on TMDB.
-  Future<List<Movie>> trending({bool fetch = true}) async {
+  /// TMDB's trending movies + series for TODAY (about 40), straight from
+  /// `/trending/all/day`. Without [fetch] only the last saved copy is
+  /// returned, so the first paint never waits on TMDB. A saved copy younger
+  /// than 15 minutes is reused (the app syncs every minute); [force] always
+  /// asks TMDB (pull to refresh, new day, new language).
+  Future<List<Movie>> trending({bool fetch = true, bool force = false}) async {
     final prefs = await SharedPreferences.getInstance();
     if (fetch) {
-      final pages = await Future.wait([
-        _get('/trending/all/week', {'page': '1'}),
-        _get('/trending/all/week', {'page': '2'}),
-      ]);
-      final all = <dynamic>[];
-      for (final p in pages) {
-        if (p is Map && p['results'] is List) all.addAll(p['results'] as List);
+      final at = prefs.getInt(_trendingAtKey) ?? 0;
+      final age = DateTime.now().millisecondsSinceEpoch - at;
+      final fresh = prefs.getString(_trendingKey) != null &&
+          age >= 0 &&
+          age < const Duration(minutes: 15).inMilliseconds;
+      if (force || !fresh) {
+        final pages = await Future.wait([
+          _get('/trending/all/day', {'page': '1'}),
+          _get('/trending/all/day', {'page': '2'}),
+        ]);
+        final all = <dynamic>[];
+        for (final p in pages) {
+          if (p is Map && p['results'] is List) all.addAll(p['results'] as List);
+        }
+        if (all.isNotEmpty) {
+          await prefs.setString(_trendingKey, jsonEncode(all));
+          await prefs.setInt(
+              _trendingAtKey, DateTime.now().millisecondsSinceEpoch);
+        }
       }
-      if (all.isNotEmpty) await prefs.setString(_trendingKey, jsonEncode(all));
     }
     try {
       final c = prefs.getString(_trendingKey);
       if (c == null) return const [];
       return (jsonDecode(c) as List)
           .map((e) => fromJson(e))
+          .whereType<Movie>()
+          .toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// TMDB's live "popular" list: movies ([tv] false) or series ([tv] true),
+  /// about 40 titles from `/movie/popular` or `/tv/popular`. Same saving and
+  /// 15 minute reuse as [trending]; [force] always asks TMDB.
+  Future<List<Movie>> popular(
+      {required bool tv, bool fetch = true, bool force = false}) async {
+    final type = tv ? 'tv' : 'movie';
+    final key = 'cache_tmdb_popular_$type';
+    final atKey = '${key}_at';
+    final prefs = await SharedPreferences.getInstance();
+    if (fetch) {
+      final age = DateTime.now().millisecondsSinceEpoch -
+          (prefs.getInt(atKey) ?? 0);
+      final fresh = prefs.getString(key) != null &&
+          age >= 0 &&
+          age < const Duration(minutes: 15).inMilliseconds;
+      if (force || !fresh) {
+        final pages = await Future.wait([
+          _get('/$type/popular', {'page': '1'}),
+          _get('/$type/popular', {'page': '2'}),
+        ]);
+        final all = <dynamic>[];
+        for (final p in pages) {
+          if (p is Map && p['results'] is List) all.addAll(p['results'] as List);
+        }
+        if (all.isNotEmpty) {
+          await prefs.setString(key, jsonEncode(all));
+          await prefs.setInt(atKey, DateTime.now().millisecondsSinceEpoch);
+        }
+      }
+    }
+    try {
+      final c = prefs.getString(key);
+      if (c == null) return const [];
+      return (jsonDecode(c) as List)
+          .map((e) => fromJson(e, type: type))
           .whereType<Movie>()
           .toList();
     } catch (_) {
