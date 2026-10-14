@@ -1,7 +1,7 @@
 {
   "enabled": false,
   "id": "welcome-1",
-  "title": "Welcome to Streambox",
+  "title": "Welcome to DamiMovies",
   "message": "Stream movies and series, save them for later and download inside the app.",
   "popup": true,
   "button_text": "",
