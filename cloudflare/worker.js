@@ -20,6 +20,10 @@
  *   CF_API_TOKEN     secret
  *   ANALYTICS        Analytics Engine binding
  *
+ * Accounts (D1 `DB` binding), see AUTH.md:
+ *   POST /auth/signup  {email}  registers a Gmail address (safe to repeat)
+ *   POST /auth/login   {email}  200 if registered, 404 not_registered if not
+ *
  * Premium subscriptions (Paystack + D1), see SUBSCRIPTIONS.md:
  *   GET  /sub/config   price, local-currency equivalent
  *   POST /sub/start    creates a Paystack checkout
@@ -113,6 +117,11 @@ export default {
       request.method === "GET"
     ) {
       return stats(url, env);
+    }
+
+    // Accounts: sign up first, then log in (see AUTH.md).
+    if (url.pathname.startsWith("/auth/")) {
+      return accounts(request, env, url);
     }
 
     // Premium subscriptions.
@@ -951,6 +960,59 @@ async function ensureSchema(env) {
     ),
   ]);
   schemaReady = true;
+}
+
+// ---- accounts ----------------------------------------------------------------
+
+function cleanGmail(raw) {
+  const e = String(raw || "").trim().toLowerCase();
+  if (!/^[a-z0-9._%+-]+@(gmail|googlemail)\.com$/.test(e)) return "";
+  // googlemail.com and gmail.com are the same mailbox.
+  return e.replace(/@googlemail\.com$/, "@gmail.com");
+}
+
+async function accounts(request, env, url) {
+  if (request.method !== "POST") return json({ error: "not found" }, 404);
+  if (!env.DB) return json({ error: "accounts are not set up on the server" }, 503);
+
+  let body = {};
+  try {
+    body = await request.json();
+  } catch (_) {}
+  const email = cleanGmail(body && body.email);
+  if (!email) return json({ error: "not_gmail" }, 400);
+
+  try {
+    await env.DB.prepare(
+      "CREATE TABLE IF NOT EXISTS accounts (email TEXT PRIMARY KEY, created_at INTEGER NOT NULL DEFAULT 0, last_login INTEGER NOT NULL DEFAULT 0)"
+    ).run();
+    const now = Math.floor(Date.now() / 1000);
+
+    if (url.pathname === "/auth/signup") {
+      const r = await env.DB.prepare(
+        "INSERT OR IGNORE INTO accounts (email, created_at, last_login) VALUES (?, ?, ?)"
+      )
+        .bind(email, now, now)
+        .run();
+      const created = Boolean(r && r.meta && r.meta.changes > 0);
+      return json({ ok: true, created });
+    }
+
+    if (url.pathname === "/auth/login") {
+      const row = await env.DB.prepare("SELECT email FROM accounts WHERE email = ?")
+        .bind(email)
+        .first();
+      if (!row) return json({ error: "not_registered" }, 404);
+      await env.DB.prepare("UPDATE accounts SET last_login = ? WHERE email = ?")
+        .bind(now, email)
+        .run();
+      return json({ ok: true });
+    }
+  } catch (e) {
+    console.error("accounts error", e && e.message);
+    return json({ error: "server error" }, 500);
+  }
+  return json({ error: "not found" }, 404);
 }
 
 async function subscriptions(request, env, url) {
