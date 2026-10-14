@@ -15,8 +15,9 @@ import 'browse_screen.dart';
 import 'downloads_screen.dart';
 import 'library_screen.dart';
 import 'movies_screen.dart';
+import 'profile_screen.dart';
 
-/// The whole app: Movies, Browser, Downloads and My Library.
+/// The whole app: Home, Profile, Library, Browser and Downloads.
 class ShellScreen extends StatefulWidget {
   const ShellScreen({super.key});
 
@@ -102,9 +103,10 @@ class _ShellScreenState extends State<ShellScreen>
           index: _index,
           children: const [
             MoviesScreen(),
+            ProfileScreen(),
+            LibraryScreen(),
             BrowseScreen(),
             DownloadsScreen(),
-            LibraryScreen(),
           ],
         ),
         bottomNavigationBar: _FloatingNav(
@@ -112,6 +114,15 @@ class _ShellScreenState extends State<ShellScreen>
           onTap: (i) => setState(() => _index = i),
           items: [
             _NavItem(Icons.home_outlined, Icons.home_rounded, 'Home'.tr),
+            _NavItem(Icons.person_outline_rounded, Icons.person_rounded,
+                'Profile'.tr),
+            _NavItem(
+              Icons.bookmark_border_rounded,
+              Icons.bookmark_rounded,
+              'Library'.tr,
+              badge: MovieLibrary.instance,
+              count: () => MovieLibrary.instance.watchLater.length,
+            ),
             _NavItem(Icons.public_outlined, Icons.public_rounded, 'Browser'.tr),
             _NavItem(
               Icons.download_outlined,
@@ -119,13 +130,6 @@ class _ShellScreenState extends State<ShellScreen>
               'Downloads'.tr,
               badge: DownloadManager.instance,
               count: () => DownloadManager.instance.activeCount,
-            ),
-            _NavItem(
-              Icons.bookmark_border_rounded,
-              Icons.bookmark_rounded,
-              'Library'.tr,
-              badge: MovieLibrary.instance,
-              count: () => MovieLibrary.instance.watchLater.length,
             ),
           ],
         ),
