@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show Directory;
+import 'dart:io' show Directory, File;
 import 'dart:isolate';
 import 'dart:ui' show IsolateNameServer;
 
@@ -13,6 +13,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config.dart';
 import '../models/download_task.dart';
+import 'subscription_service.dart';
 
 // ------------------------------------------------------------- name helpers
 
@@ -301,7 +302,10 @@ class DownloadManager extends ChangeNotifier {
         headers: headers,
         showNotification: true,
         openFileFromNotification: true,
-        saveInPublicStorage: true,
+        // Ad-free (premium) users get the file in the phone's Downloads
+        // folder; everyone else keeps it in the app's own folder. Both play
+        // in the Downloads section.
+        saveInPublicStorage: SubscriptionService.instance.isPremium,
       );
     } catch (_) {}
     if (id == null) return 'Couldn\'t start the download.';
@@ -391,6 +395,22 @@ class DownloadManager extends ChangeNotifier {
   }
 
   /// Opens a finished download with an installed app. False if it couldn't.
+  /// Full path of a finished download if the file is still there, else null.
+  Future<String?> localPath(String id) async {
+    if (!_available) return null;
+    try {
+      final all = await fd.FlutterDownloader.loadTasks() ?? [];
+      for (final n in all) {
+        if (n.taskId != id) continue;
+        final name = n.filename;
+        if (name == null || name.isEmpty) return null;
+        final path = '${n.savedDir}/$name';
+        return await File(path).exists() ? path : null;
+      }
+    } catch (_) {}
+    return null;
+  }
+
   Future<bool> open(String id) async {
     try {
       return await fd.FlutterDownloader.open(taskId: id);
