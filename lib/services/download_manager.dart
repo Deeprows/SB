@@ -394,6 +394,20 @@ class DownloadManager extends ChangeNotifier {
     }
   }
 
+  /// True when [url] answers with a file (not a web page). Used by the
+  /// in-app browser: the Android WebView silently ignores file responses
+  /// whose address has no .mp4/.mkv ending, so those links are checked here
+  /// and handed to the downloader instead.
+  Future<bool> looksLikeFile(String url,
+      {String referer = '', String cookie = ''}) async {
+    final uri = Uri.tryParse(url);
+    if (uri == null || !(uri.scheme == 'http' || uri.scheme == 'https')) {
+      return false;
+    }
+    final probe = await _probe(url, referer, cookie);
+    return probe.error == null;
+  }
+
   /// Opens a finished download with an installed app. False if it couldn't.
   /// Full path of a finished download if the file is still there, else null.
   Future<String?> localPath(String id) async {
