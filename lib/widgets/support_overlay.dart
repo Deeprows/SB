@@ -26,7 +26,7 @@ Future<SupportChoice?> showSupportOverlay(BuildContext context) {
   return showGeneralDialog<SupportChoice>(
     context: context,
     barrierDismissible: false,
-    barrierLabel: 'Support Streambox',
+    barrierLabel: 'Support DamiMovies',
     barrierColor: Colors.black.withValues(alpha: .74),
     transitionDuration: const Duration(milliseconds: 340),
     pageBuilder: (_, _, _) => const SupportOverlay(),
@@ -237,7 +237,7 @@ class _SupportOverlayState extends State<SupportOverlay>
           ),
           const SizedBox(height: 5),
           Text(
-            'Help us keep Streambox running',
+            'Help us keep DamiMovies running',
             textAlign: TextAlign.center,
             style: TextStyle(
                 color: Ui.muted, fontSize: 14, fontWeight: FontWeight.w600),
