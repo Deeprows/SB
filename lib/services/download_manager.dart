@@ -13,6 +13,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config.dart';
 import '../models/download_task.dart';
+import 'download_notifier.dart';
 import 'subscription_service.dart';
 
 // ------------------------------------------------------------- name helpers
@@ -135,6 +136,13 @@ class DownloadManager extends ChangeNotifier {
   final Map<String, _Job> _jobs = {};
   final Map<String, String> _cookies = {};
   static const _dartPrefix = 'dart-';
+  static const _kNotice = 'dl_inapp_notice_v1';
+  DateTime _lastSync = DateTime.fromMillisecondsSinceEpoch(0);
+  bool _serviceOn = false;
+
+  /// True when the most recent download started inside the app (backup
+  /// downloader) rather than through Android's background downloader.
+  bool lastStartedInApp = false;
   static bool _isDart(String id) => id.startsWith(_dartPrefix);
   bool _ready = false;
   bool _available = false;
@@ -236,6 +244,7 @@ class DownloadManager extends ChangeNotifier {
   }
 
   void _tick() {
+    _syncService();
     if (_notifyTimer?.isActive ?? false) return;
     _notifyTimer = Timer(const Duration(milliseconds: 300), notifyListeners);
   }
@@ -244,6 +253,58 @@ class DownloadManager extends ChangeNotifier {
     _notifyTimer?.cancel();
     notifyListeners();
     _save();
+    _syncService(force: true);
+  }
+
+  /// Keeps the progress notification (and the foreground service that keeps
+  /// the app alive) in step with the downloads running inside the app.
+  void _syncService({bool force = false}) {
+    final active = [
+      for (final t in _tasks)
+        if (_isDart(t.id) && t.active) t,
+    ];
+    if (active.isEmpty) {
+      if (_serviceOn) {
+        _serviceOn = false;
+        unawaited(DownloadNotifier.stop());
+      }
+      return;
+    }
+    final now = DateTime.now();
+    if (!force &&
+        _serviceOn &&
+        now.difference(_lastSync) < const Duration(milliseconds: 900)) {
+      return;
+    }
+    _lastSync = now;
+    _serviceOn = true;
+    final known = [
+      for (final t in active)
+        if (t.percent > 0) t.percent,
+    ];
+    final percent = known.isEmpty
+        ? -1
+        : known.reduce((a, b) => a + b) ~/ known.length;
+    final title =
+        active.length == 1 ? active.first.name : '${active.length} downloads';
+    final text = percent < 0 ? 'Starting…' : '$percent%';
+    unawaited(DownloadNotifier.progress(
+        title: title, text: text, percent: percent));
+  }
+
+  /// True once, the first time a download runs inside the app: the caller
+  /// then explains how it works (see widgets/download_notice.dart).
+  Future<bool> takeInAppNotice() async {
+    if (!lastStartedInApp) return false;
+    lastStartedInApp = false;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (prefs.getBool(_kNotice) ?? false) return false;
+      await prefs.setBool(_kNotice, true);
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   DownloadTask? _find(String id) {
@@ -352,6 +413,7 @@ class DownloadManager extends ChangeNotifier {
     }
 
     if (id != null) {
+      lastStartedInApp = false;
       _tasks.insert(
         0,
         DownloadTask(
@@ -398,6 +460,7 @@ class DownloadManager extends ChangeNotifier {
       );
       _tasks.insert(0, t);
       _cookies[t.id] = cookie;
+      lastStartedInApp = true;
       _changed();
       unawaited(_run(t, resume: false));
       return null;
@@ -410,6 +473,7 @@ class DownloadManager extends ChangeNotifier {
     t.status = DownloadStatus.failed;
     t.error = message;
     _changed();
+    unawaited(DownloadNotifier.result(t.name, ok: false, detail: message));
   }
 
   /// Streams the file to the app's Downloads folder. [resume] continues a
@@ -475,6 +539,7 @@ class DownloadManager extends ChangeNotifier {
       t.status = DownloadStatus.completed;
       t.error = null;
       _changed();
+      unawaited(DownloadNotifier.result(t.name, ok: true));
 
       // Ad-free (premium) users: also put a copy in the phone's Downloads
       // folder. Newer Android versions may refuse this; the in-app copy is
