@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../config.dart';
 import '../models/movie.dart';
 import '../models/movie_info.dart';
+import '../models/trailer_item.dart';
 
 /// Talks to TMDB (api.themoviedb.org, v3) and turns its results into [Movie]s.
 ///
@@ -409,6 +410,120 @@ class TmdbService {
         .map((e) => fromJson(e))
         .whereType<Movie>()
         .toList();
+  }
+
+  // ----------------------------------------------------- latest trailers
+
+  /// The choices of the home page's "Latest Trailers" drop-down.
+  static const trailerCategories = [
+    'Popular',
+    'Streaming',
+    'On TV',
+    'For Rent',
+    'In Theaters',
+  ];
+
+  final Map<String, List<TrailerItem>> _trailerCache = {};
+  final Map<String, DateTime> _trailerAt = {};
+
+  /// Titles of one [category] with their newest official trailer, newest
+  /// trailer first. Titles without a YouTube trailer are left out. Kept for
+  /// 30 minutes so switching back and forth is instant.
+  Future<List<TrailerItem>> latestTrailers(String category,
+      {bool force = false}) async {
+    if (!enabled) return const [];
+    final hit = _trailerCache[category];
+    final at = _trailerAt[category];
+    if (!force &&
+        hit != null &&
+        at != null &&
+        DateTime.now().difference(at) < const Duration(minutes: 30)) {
+      return hit;
+    }
+
+    final (path, query, type) = switch (category) {
+      'Streaming' => (
+          '/discover/movie',
+          <String, String>{
+            'with_watch_monetization_types': 'flatrate',
+            'watch_region': 'US',
+            'sort_by': 'popularity.desc',
+          },
+          'movie'
+        ),
+      'On TV' => ('/tv/on_the_air', <String, String>{}, 'tv'),
+      'For Rent' => (
+          '/discover/movie',
+          <String, String>{
+            'with_watch_monetization_types': 'rent',
+            'watch_region': 'US',
+            'sort_by': 'popularity.desc',
+          },
+          'movie'
+        ),
+      'In Theaters' => (
+          '/movie/now_playing',
+          <String, String>{'region': 'US'},
+          'movie'
+        ),
+      _ => ('/movie/popular', <String, String>{}, 'movie'),
+    };
+
+    final d = await _get(path, query);
+    if (d is! Map || d['results'] is! List) return hit ?? const [];
+    final rows = (d['results'] as List).whereType<Map>().take(16).toList();
+    final found = await Future.wait(rows.map((r) => _trailerItem(r, type)));
+    final items = [
+      for (final i in found)
+        if (i != null) i,
+    ]..sort((a, b) => b.published.compareTo(a.published));
+    final out = items.take(12).toList();
+    if (out.isNotEmpty) {
+      _trailerCache[category] = out;
+      _trailerAt[category] = DateTime.now();
+    }
+    return out;
+  }
+
+  Future<TrailerItem?> _trailerItem(Map r, String type) async {
+    final movie = fromJson(r, type: type);
+    if (movie == null || movie.tmdbId == null) return null;
+    final v = await _get(
+        '/$type/${movie.tmdbId}/videos', {'include_video_language': 'en,null'});
+    if (v is! Map || v['results'] is! List) return null;
+
+    Map? best;
+    var bestScore = -1;
+    for (final e in v['results'] as List) {
+      if (e is! Map || e['site'] != 'YouTube') continue;
+      if ('${e['key'] ?? ''}'.isEmpty) continue;
+      final kind = '${e['type'] ?? ''}';
+      if (kind != 'Trailer' && kind != 'Teaser') continue;
+      final score = (kind == 'Trailer' ? 2 : 0) + (e['official'] == true ? 1 : 0);
+      final when = '${e['published_at'] ?? ''}';
+      if (best == null ||
+          score > bestScore ||
+          (score == bestScore &&
+              when.compareTo('${best['published_at'] ?? ''}') > 0)) {
+        best = e;
+        bestScore = score;
+      }
+    }
+    if (best == null) return null;
+
+    final trailer = Trailer(
+      key: '${best['key']}',
+      name: '${best['name'] ?? 'Official Trailer'}',
+      type: '${best['type'] ?? 'Trailer'}',
+      official: best['official'] == true,
+    );
+    final back = '${r['backdrop_path'] ?? ''}';
+    return TrailerItem(
+      movie,
+      trailer,
+      back.isEmpty ? trailer.thumbnail : 'https://image.tmdb.org/t/p/w780$back',
+      '${best['published_at'] ?? ''}',
+    );
   }
 
   /// Searches people (for Favorite people in the profile).
