@@ -16,6 +16,7 @@ void openMoviePlayer(BuildContext context, Movie m) {
       ].join(' · '),
       url: m.url,
       altUrl: m.altUrl,
+      thirdUrl: m.thirdUrl,
       movie: m,
     ),
   ));
