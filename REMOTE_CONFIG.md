@@ -11,6 +11,7 @@ default, so you can never break the app by leaving something out.
   "ads":    { "enabled": true, "supportUrl": "https://...", "intervalMinutes": 10, "skipAfterSeconds": 6 },
   "movies": { "embedBase": "https://vsembed.su/embed",
               "altEmbedBase": "https://web.nxsha.app/embed",
+              "thirdEmbedBase": "https://vidsrc.mov/embed",
               "downloadBase": "https://web.nxsha.app/dl",
               "replaceHosts": ["vsembed.ru", "vsembed.su"] },
   "update": { "apkUrl": "", "version": "", "notes": "" },
@@ -32,7 +33,9 @@ default, so you can never break the app by leaving something out.
 
 ## Movies
 Player links are built from the TMDB id: `<embedBase>/movie/<id>`,
-`<embedBase>/tv/<id>`; backup player (Switch button) from `altEmbedBase`;
+`<embedBase>/tv/<id>`; backup player (Switch button, 2/3) from `altEmbedBase` and the third player
+(Switch 3/3) from `thirdEmbedBase` (`<thirdEmbedBase>/movie/<id>`,
+`<thirdEmbedBase>/tv/<id>/1/1`);
 Download from `<downloadBase>/movie|tv/<id>`. Write the base **without** a
 trailing slash and **without** the id. Rows in `movies.json` that still have a
 full link on a host listed in `replaceHosts` are moved to `embedBase`
