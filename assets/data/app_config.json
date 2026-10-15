@@ -11,6 +11,7 @@
   "movies": {
     "embedBase": "https://vsembed.su/embed",
     "altEmbedBase": "https://web.nxsha.app/embed",
+    "thirdEmbedBase": "https://vidsrc.mov/embed",
     "downloadBase": "https://web.nxsha.app/dl",
     "replaceHosts": ["vsembed.ru", "vsembed.su"]
   },
