@@ -33,12 +33,28 @@ class Movie {
       ? '${RemoteConfig.instance.altEmbedBase}/tv/$id/1/1'
       : '${RemoteConfig.instance.altEmbedBase}/movie/$id';
 
-  /// Backup player for this title, or '' when its id is unknown. The id is
-  /// the TMDB id, or the id inside the row's own embed link (older rows).
+  /// Third player link (Switch button 3/3): movies
+  /// `<thirdEmbedBase>/movie/<id>`, series `<thirdEmbedBase>/tv/<id>/1/1`.
+  static String thirdEmbedUrlFor(String id, {bool tv = false}) => tv
+      ? '${RemoteConfig.instance.thirdEmbedBase}/tv/$id/1/1'
+      : '${RemoteConfig.instance.thirdEmbedBase}/movie/$id';
+
+  /// The id the backup players use: the TMDB id, or the id inside the row's
+  /// own embed link (older rows). Null when unknown.
+  String? get _embedId =>
+      tmdbId?.toString() ??
+      RegExp(r'/embed/(?:movie|tv)/(tt\d+|\d+)').firstMatch(url)?.group(1);
+
+  /// Backup player for this title, or '' when its id is unknown.
   String get altUrl {
-    final id = tmdbId?.toString() ??
-        RegExp(r'/embed/(?:movie|tv)/(tt\d+|\d+)').firstMatch(url)?.group(1);
+    final id = _embedId;
     return id == null ? '' : altEmbedUrlFor(id, tv: isSeries);
+  }
+
+  /// Third player for this title, or '' when its id is unknown.
+  String get thirdUrl {
+    final id = _embedId;
+    return id == null ? '' : thirdEmbedUrlFor(id, tv: isSeries);
   }
 
   /// Download link for a TMDB id: `<downloadBase>/movie/<id>` or
