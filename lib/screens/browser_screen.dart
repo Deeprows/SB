@@ -10,6 +10,7 @@ import '../config.dart';
 import '../services/ad_shield.dart';
 import '../services/download_manager.dart';
 import '../theme/app_theme.dart';
+import '../widgets/download_notice.dart';
 import '../widgets/glass.dart';
 import 'downloads_screen.dart';
 
@@ -398,6 +399,18 @@ return JSON.stringify(out.slice(0,12));})()''';
           ),
         ));
       return;
+    }
+    messenger.hideCurrentSnackBar();
+    if (await DownloadManager.instance.takeInAppNotice()) {
+      if (!mounted) return;
+      final view = await showInAppDownloadNotice(context);
+      if (!mounted) return;
+      if (view) {
+        await Navigator.of(context).push(MaterialPageRoute<void>(
+          builder: (_) => const DownloadsScreen(),
+        ));
+        return;
+      }
     }
     messenger
       ..hideCurrentSnackBar()
