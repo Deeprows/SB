@@ -36,6 +36,17 @@ class DownloadNotifier {
     } catch (_) {}
   }
 
+  /// Copies a file into the phone's Downloads folder (Downloads/DamiMovies).
+  /// Returns where it went, or null when it failed.
+  static Future<String?> saveToDownloads(String path, String name) async {
+    try {
+      return await _channel
+          .invokeMethod<String>('saveToDownloads', {'path': path, 'name': name});
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// A "finished" or "failed" notification that stays in the tray.
   static Future<void> result(String name,
       {required bool ok, String? detail}) async {
