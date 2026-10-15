@@ -76,6 +76,9 @@ jobs:
       - name: Patch background playback
         run: python3 tool/patch_background_playback.py
 
+      - name: Patch download service
+        run: python3 tool/patch_download_service.py
+
       - name: Patch plugin compileSdk (Android API 36)
         run: python3 tool/patch_compile_sdk.py
 
