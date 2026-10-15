@@ -10,14 +10,17 @@ import '../models/trailer_item.dart';
 import '../services/tmdb_service.dart';
 import '../theme/app_theme.dart';
 import '../utils/l10n.dart';
+import 'trailer_popup.dart';
 
 /// "Latest Trailers" on the home page, like TMDB: a row of trailer cards with
 /// a drop-down (Popular, Streaming, On TV, For Rent, In Theaters).
 ///
 ///  * Hold a card (or hover it with a mouse) and the trailer plays on the
 ///    card, muted.
-///  * Tap a card and that title's page opens, where the person can watch the
-///    full trailer, play it or download it.
+///  * Tap a card and the trailer opens in a popup and plays with sound. A
+///    small "Watch movie now | Later" prompt appears over it: Watch movie now
+///    opens the title's page (play, download...), Later hides the prompt and
+///    the trailer keeps playing.
 class LatestTrailersRow extends StatefulWidget {
   final void Function(Movie) onOpen;
   const LatestTrailersRow({super.key, required this.onOpen});
@@ -217,7 +220,10 @@ class _LatestTrailersRowState extends State<LatestTrailersRow> {
       },
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: () => widget.onOpen(item.movie),
+        onTap: () {
+          _preview(null); // stop the muted card preview first
+          showTrailerPopup(context, item, onWatch: widget.onOpen);
+        },
         onLongPress: () => _preview(playing ? null : key),
         child: SizedBox(
           width: _cardW,
