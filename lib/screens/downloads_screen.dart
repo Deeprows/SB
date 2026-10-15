@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 
 import '../models/download_task.dart';
 import '../services/download_manager.dart';
+import '../services/subscription_service.dart';
 import '../theme/app_theme.dart';
 import '../utils/format.dart';
 import 'browser_screen.dart';
+import 'remove_ads_screen.dart';
 import 'local_player_screen.dart';
 
 IconData _iconFor(String ext) {
@@ -114,7 +116,7 @@ class _Footnote extends StatelessWidget {
     return Padding(
       padding: EdgeInsets.only(top: 8),
       child: Text(
-        'Downloads keep running in the background with a notification, even if you close the app, and are saved to your Downloads folder.',
+        'Files download inside the app with a progress notification. When one is finished, tap the save icon to copy it to your phone\'s Downloads folder (needs a token).',
         textAlign: TextAlign.center,
         style: TextStyle(color: Ui.dim, fontSize: 11.5, height: 1.4),
       ),
@@ -146,6 +148,58 @@ class _TaskTile extends StatelessWidget {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('Couldn\'t open it here. Find it in your Downloads folder.')));
     }
+  }
+
+  Future<void> _saveToPhone(BuildContext context) async {
+    // Saving to the phone folder needs a token (the same one that removes
+    // ads). Without one the person is sent to the token screen first. When
+    // the token feature is off there is no way to get one, so saving stays
+    // open to everybody.
+    final subs = SubscriptionService.instance;
+    if (subs.tokensVisible && !subs.isPremium) {
+      final go = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: Ui.panel,
+          icon: Icon(Icons.vpn_key_rounded, color: Ui.redSoft, size: 32),
+          title: const Text('Token needed'),
+          content: Text(
+            'Saving files to your phone\'s Downloads folder needs a token. '
+            'A token also removes ads. You can still play your downloads '
+            'inside the app without one.',
+            style: TextStyle(color: Ui.muted, height: 1.4),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Not now')),
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: Text('Get token', style: TextStyle(color: Ui.redSoft))),
+          ],
+        ),
+      );
+      if (go != true || !context.mounted) return;
+      await Navigator.of(context).push(
+          MaterialPageRoute<void>(builder: (_) => const RemoveAdsScreen()));
+      // Back from the token screen: carry on only if a token was used.
+      if (!context.mounted || !subs.isPremium) return;
+    }
+    final messenger = ScaffoldMessenger.of(context);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(const SnackBar(
+        content: Text('Saving to your phone…'),
+        duration: Duration(seconds: 30),
+      ));
+    final saved = await _m.saveToPhone(task.id);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text(saved != null
+            ? 'Saved to your phone: $saved'
+            : 'Couldn\'t save it. Allow storage access and try again.'),
+      ));
   }
 
   Future<void> _confirmDelete(BuildContext context) async {
@@ -302,10 +356,11 @@ class _TaskTile extends StatelessWidget {
               tooltip: 'Retry',
               onPressed: () => _m.resume(t.id),
               icon: const Icon(Icons.refresh_rounded)),
-          IconButton(
-              tooltip: 'Open link in browser',
-              onPressed: () => openExternally(t.url),
-              icon: const Icon(Icons.public_rounded)),
+          if (SubscriptionService.instance.isPremium)
+            IconButton(
+                tooltip: 'Open link in browser',
+                onPressed: () => openExternally(t.url),
+                icon: const Icon(Icons.public_rounded)),
           IconButton(
               tooltip: 'Remove',
               onPressed: () => _m.cancel(t.id),
@@ -313,11 +368,16 @@ class _TaskTile extends StatelessWidget {
         ];
       case DownloadStatus.completed:
         return [
+          IconButton(
+              tooltip: 'Save to phone folder',
+              onPressed: () => _saveToPhone(context),
+              icon: const Icon(Icons.save_alt_rounded)),
           PopupMenuButton<String>(
             color: Ui.panel,
             icon: const Icon(Icons.more_vert_rounded),
             onSelected: (v) {
               if (v == 'open') _open(context);
+              if (v == 'save') _saveToPhone(context);
               if (v == 'delete') _confirmDelete(context);
             },
             itemBuilder: (_) => const [
@@ -328,6 +388,14 @@ class _TaskTile extends StatelessWidget {
                     contentPadding: EdgeInsets.zero,
                     leading: Icon(Icons.play_circle_outline_rounded),
                     title: Text('Open')),
+              ),
+              PopupMenuItem(
+                value: 'save',
+                child: ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.save_alt_rounded),
+                    title: Text('Save to phone folder')),
               ),
               PopupMenuItem(
                 value: 'delete',
