@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show Directory, File;
+import 'dart:io' show Directory, File, FileMode, IOSink;
 import 'dart:isolate';
 import 'dart:ui' show IsolateNameServer;
 
@@ -87,7 +87,34 @@ class _Probe {
   final String? error;
   final String? fileName;
   final int? total;
-  const _Probe({this.error, this.fileName, this.total});
+  final String type;
+  const _Probe({this.error, this.fileName, this.total, this.type = ''});
+}
+
+/// A running in-app (plain Dart) download. See [DownloadManager._run].
+class _Job {
+  bool stopped = false; // paused or cancelled
+  http.Client? client;
+}
+
+String _extForType(String type) {
+  final t = type.split(';').first.trim().toLowerCase();
+  switch (t) {
+    case 'video/mp4':
+      return '.mp4';
+    case 'video/x-matroska':
+    case 'video/matroska':
+      return '.mkv';
+    case 'video/webm':
+      return '.webm';
+    case 'video/quicktime':
+      return '.mov';
+    case 'video/x-msvideo':
+      return '.avi';
+    case 'video/3gpp':
+      return '.3gp';
+  }
+  return '';
 }
 
 // ------------------------------------------------------------------ manager
@@ -105,6 +132,10 @@ class DownloadManager extends ChangeNotifier {
 
   final List<DownloadTask> _tasks = [];
   final Set<String> _starting = {};
+  final Map<String, _Job> _jobs = {};
+  final Map<String, String> _cookies = {};
+  static const _dartPrefix = 'dart-';
+  static bool _isDart(String id) => id.startsWith(_dartPrefix);
   bool _ready = false;
   bool _available = false;
   Timer? _notifyTimer;
@@ -183,6 +214,14 @@ class DownloadManager extends ChangeNotifier {
         }
       } catch (_) {}
     }
+    // In-app (Dart) downloads do not survive the app being closed: mark them
+    // so they can be resumed from where they stopped.
+    for (final t in _tasks) {
+      if (_isDart(t.id) && t.active && !_jobs.containsKey(t.id)) {
+        t.status = DownloadStatus.failed;
+        t.error = 'This download was interrupted. Tap retry to continue.';
+      }
+    }
     _changed();
   }
 
@@ -253,10 +292,6 @@ class DownloadManager extends ChangeNotifier {
     String cookie = '',
     String? name,
   }) async {
-    if (!_available) {
-      return 'Background downloads aren\'t available on this device.';
-    }
-
     // Same link already in the list -> resume it instead of duplicating.
     for (final t in _tasks) {
       if (t.url == url && t.status != DownloadStatus.completed) {
@@ -285,48 +320,204 @@ class DownloadManager extends ChangeNotifier {
     unawaited(_askNotificationPermission());
 
     final dir = await _saveDir();
-    final fileName =
+    var fileName =
         sanitizeFileName(name ?? probe.fileName ?? fileNameFromUrl(url));
+    if (!fileName.contains('.')) fileName += _extForType(probe.type);
     final headers = <String, String>{
       'User-Agent': AppConfig.userAgent,
       if (referer.isNotEmpty) 'Referer': referer,
       if (cookie.isNotEmpty) 'Cookie': cookie,
     };
 
+    // 1) The phone's background downloader (keeps going when the app is
+    //    closed, shows a notification).
     String? id;
-    try {
-      id = await fd.FlutterDownloader.enqueue(
-        url: url,
-        savedDir: dir,
-        fileName: fileName,
-        headers: headers,
-        showNotification: true,
-        openFileFromNotification: true,
-        // Ad-free (premium) users get the file in the phone's Downloads
-        // folder; everyone else keeps it in the app's own folder. Both play
-        // in the Downloads section.
-        saveInPublicStorage: SubscriptionService.instance.isPremium,
-      );
-    } catch (_) {}
-    if (id == null) return 'Couldn\'t start the download.';
+    if (_available) {
+      try {
+        id = await fd.FlutterDownloader.enqueue(
+          url: url,
+          savedDir: dir,
+          fileName: fileName,
+          headers: headers,
+          showNotification: true,
+          openFileFromNotification: true,
+          // Ad-free (premium) users get the file in the phone's Downloads
+          // folder; everyone else keeps it in the app's own folder. Both
+          // play in the Downloads section.
+          saveInPublicStorage: SubscriptionService.instance.isPremium,
+        );
+      } catch (e) {
+        debugPrint('FlutterDownloader.enqueue failed: $e');
+      }
+    }
 
-    _tasks.insert(
-      0,
-      DownloadTask(
-        id: id,
+    if (id != null) {
+      _tasks.insert(
+        0,
+        DownloadTask(
+          id: id,
+          url: url,
+          referer: referer,
+          name: fileName,
+          total: probe.total,
+        ),
+      );
+      _changed();
+      return null;
+    }
+
+    // 2) Backup: download inside the app with plain Dart, so the file still
+    //    arrives in the app instead of being sent to another browser.
+    return _startInApp(url, referer, cookie, dir, fileName, probe.total);
+  }
+
+  // ------------------------------------------------- in-app (Dart) download
+
+  Future<String> _uniqueName(String dir, String name) async {
+    if (!await File('$dir/$name').exists()) return name;
+    final dot = name.lastIndexOf('.');
+    final base = dot > 0 ? name.substring(0, dot) : name;
+    final ext = dot > 0 ? name.substring(dot) : '';
+    for (var i = 1; i < 1000; i++) {
+      final n = '$base ($i)$ext';
+      if (!await File('$dir/$n').exists()) return n;
+    }
+    return name;
+  }
+
+  Future<String?> _startInApp(String url, String referer, String cookie,
+      String dir, String fileName, int? total) async {
+    try {
+      final name = await _uniqueName(dir, fileName);
+      final t = DownloadTask(
+        id: '$_dartPrefix${DateTime.now().microsecondsSinceEpoch}',
         url: url,
         referer: referer,
-        name: fileName,
-        total: probe.total,
-      ),
-    );
+        name: name,
+        total: total,
+      );
+      _tasks.insert(0, t);
+      _cookies[t.id] = cookie;
+      _changed();
+      unawaited(_run(t, resume: false));
+      return null;
+    } catch (_) {
+      return 'Couldn\'t start the download.';
+    }
+  }
+
+  void _fail(DownloadTask t, String message) {
+    t.status = DownloadStatus.failed;
+    t.error = message;
     _changed();
-    return null;
+  }
+
+  /// Streams the file to the app's Downloads folder. [resume] continues a
+  /// partly downloaded file with a Range request.
+  Future<void> _run(DownloadTask t, {required bool resume}) async {
+    final job = _Job();
+    _jobs[t.id] = job;
+    final client = http.Client();
+    job.client = client;
+    IOSink? sink;
+    try {
+      final dir = await _saveDir();
+      final file = File('$dir/${t.name}');
+      var have = 0;
+      if (resume && await file.exists()) have = await file.length();
+
+      final req = http.Request('GET', Uri.parse(t.url))
+        ..followRedirects = true
+        ..maxRedirects = 8;
+      req.headers['User-Agent'] = AppConfig.userAgent;
+      req.headers['Accept'] = '*/*';
+      if (t.referer.isNotEmpty) req.headers['Referer'] = t.referer;
+      final cookie = _cookies[t.id] ?? '';
+      if (cookie.isNotEmpty) req.headers['Cookie'] = cookie;
+      if (have > 0) req.headers['Range'] = 'bytes=$have-';
+
+      final res = await client.send(req).timeout(const Duration(seconds: 25));
+      if (res.statusCode >= 400) {
+        throw 'The server replied ${res.statusCode}.';
+      }
+      final type = (res.headers['content-type'] ?? '').toLowerCase();
+      if (type.startsWith('text/html') &&
+          fileNameFromDisposition(res.headers['content-disposition']) == null) {
+        throw 'This link opens a web page, not a file.';
+      }
+
+      final append = have > 0 && res.statusCode == 206;
+      if (!append) have = 0; // server ignored Range: start from the top
+      final len = res.contentLength;
+      if (len != null && len > 0) t.total = len + have;
+
+      sink = file.openWrite(mode: append ? FileMode.append : FileMode.write);
+      var got = have;
+      await for (final chunk in res.stream) {
+        if (job.stopped) break;
+        sink.add(chunk);
+        got += chunk.length;
+        final total = t.total;
+        if (total != null && total > 0) {
+          final pct = (got * 100 ~/ total).clamp(0, 100);
+          if (pct != t.percent) {
+            t.percent = pct;
+            _tick();
+          }
+        }
+      }
+      await sink.flush();
+      await sink.close();
+      sink = null;
+      if (job.stopped) return;
+
+      t.percent = 100;
+      t.status = DownloadStatus.completed;
+      t.error = null;
+      _changed();
+
+      // Ad-free (premium) users: also put a copy in the phone's Downloads
+      // folder. Newer Android versions may refuse this; the in-app copy is
+      // always kept and plays in the Downloads section.
+      if (SubscriptionService.instance.isPremium) {
+        try {
+          final pub = Directory('/storage/emulated/0/Download');
+          if (await pub.exists()) await file.copy('${pub.path}/${t.name}');
+        } catch (_) {}
+      }
+    } on TimeoutException {
+      if (!job.stopped) _fail(t, 'The server took too long to respond.');
+    } catch (e) {
+      if (!job.stopped) {
+        _fail(t, e is String ? e : 'Download failed. Check your connection and tap retry.');
+      }
+    } finally {
+      try {
+        await sink?.close();
+      } catch (_) {}
+      client.close();
+      if (identical(_jobs[t.id], job)) _jobs.remove(t.id);
+    }
+  }
+
+  void _stopJob(String id) {
+    final job = _jobs[id];
+    if (job == null) return;
+    job.stopped = true;
+    try {
+      job.client?.close();
+    } catch (_) {}
   }
 
   Future<void> pause(String id) async {
     final t = _find(id);
     if (t == null || !t.active) return;
+    if (_isDart(id)) {
+      _stopJob(id);
+      t.status = DownloadStatus.paused;
+      _changed();
+      return;
+    }
     try {
       await fd.FlutterDownloader.pause(taskId: id);
       t.status = DownloadStatus.paused;
@@ -337,6 +528,13 @@ class DownloadManager extends ChangeNotifier {
   Future<void> resume(String id) async {
     final t = _find(id);
     if (t == null || t.status == DownloadStatus.completed || t.active) return;
+    if (_isDart(id)) {
+      t.status = DownloadStatus.downloading;
+      t.error = null;
+      _changed();
+      unawaited(_run(t, resume: true));
+      return;
+    }
     try {
       final newId = t.status == DownloadStatus.failed
           ? await fd.FlutterDownloader.retry(taskId: id)
@@ -362,6 +560,10 @@ class DownloadManager extends ChangeNotifier {
   Future<void> cancel(String id) async {
     final t = _find(id);
     if (t == null) return;
+    if (_isDart(id)) {
+      await remove(id, deleteFile: true);
+      return;
+    }
     if (t.active) {
       try {
         await fd.FlutterDownloader.cancel(taskId: id);
@@ -373,6 +575,19 @@ class DownloadManager extends ChangeNotifier {
   Future<void> remove(String id, {bool deleteFile = false}) async {
     final t = _find(id);
     if (t == null) return;
+    if (_isDart(id)) {
+      _stopJob(id);
+      _cookies.remove(id);
+      _tasks.remove(t);
+      _changed();
+      if (deleteFile) {
+        try {
+          final f = File('${await _saveDir()}/${t.name}');
+          if (await f.exists()) await f.delete();
+        } catch (_) {}
+      }
+      return;
+    }
     _tasks.remove(t);
     _changed();
     try {
@@ -411,6 +626,12 @@ class DownloadManager extends ChangeNotifier {
   /// Opens a finished download with an installed app. False if it couldn't.
   /// Full path of a finished download if the file is still there, else null.
   Future<String?> localPath(String id) async {
+    if (_isDart(id)) {
+      final t = _find(id);
+      if (t == null) return null;
+      final path = '${await _saveDir()}/${t.name}';
+      return await File(path).exists() ? path : null;
+    }
     if (!_available) return null;
     try {
       final all = await fd.FlutterDownloader.loadTasks() ?? [];
@@ -426,6 +647,7 @@ class DownloadManager extends ChangeNotifier {
   }
 
   Future<bool> open(String id) async {
+    if (_isDart(id)) return false; // videos play in-app via localPath()
     try {
       return await fd.FlutterDownloader.open(taskId: id);
     } catch (_) {
@@ -494,7 +716,7 @@ class DownloadManager extends ChangeNotifier {
           res.contentLength! > 0) {
         total = res.contentLength;
       }
-      return _Probe(fileName: disp, total: total);
+      return _Probe(fileName: disp, total: total, type: type);
     } on TimeoutException {
       return const _Probe(error: 'The server took too long to respond.');
     } catch (_) {
