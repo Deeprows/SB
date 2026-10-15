@@ -14,7 +14,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../config.dart';
 import '../models/download_task.dart';
 import 'download_notifier.dart';
-import 'subscription_service.dart';
 
 // ------------------------------------------------------------- name helpers
 
@@ -402,10 +401,9 @@ class DownloadManager extends ChangeNotifier {
           headers: headers,
           showNotification: true,
           openFileFromNotification: true,
-          // Ad-free (premium) users get the file in the phone's Downloads
-          // folder; everyone else keeps it in the app's own folder. Both
-          // play in the Downloads section.
-          saveInPublicStorage: SubscriptionService.instance.isPremium,
+          // Files stay in the app's folder; "Save to phone folder" in the
+          // Downloads tab copies them to the phone's Downloads folder.
+          saveInPublicStorage: false,
         );
       } catch (e) {
         debugPrint('FlutterDownloader.enqueue failed: $e');
@@ -467,6 +465,26 @@ class DownloadManager extends ChangeNotifier {
     } catch (_) {
       return 'Couldn\'t start the download.';
     }
+  }
+
+  /// Copies a finished download to the phone's Downloads folder
+  /// (Downloads/DamiMovies). Returns where it went, or null when it failed.
+  Future<String?> saveToPhone(String id) async {
+    final t = _find(id);
+    if (t == null) return null;
+    final path = await localPath(id);
+    if (path == null) return null;
+    var out = await DownloadNotifier.saveToDownloads(path, t.name);
+    if (out == null) {
+      // Android 9 and older need storage access first.
+      try {
+        final st = await Permission.storage.request();
+        if (st.isGranted) {
+          out = await DownloadNotifier.saveToDownloads(path, t.name);
+        }
+      } catch (_) {}
+    }
+    return out;
   }
 
   void _fail(DownloadTask t, String message) {
@@ -540,16 +558,6 @@ class DownloadManager extends ChangeNotifier {
       t.error = null;
       _changed();
       unawaited(DownloadNotifier.result(t.name, ok: true));
-
-      // Ad-free (premium) users: also put a copy in the phone's Downloads
-      // folder. Newer Android versions may refuse this; the in-app copy is
-      // always kept and plays in the Downloads section.
-      if (SubscriptionService.instance.isPremium) {
-        try {
-          final pub = Directory('/storage/emulated/0/Download');
-          if (await pub.exists()) await file.copy('${pub.path}/${t.name}');
-        } catch (_) {}
-      }
     } on TimeoutException {
       if (!job.stopped) _fail(t, 'The server took too long to respond.');
     } catch (e) {
