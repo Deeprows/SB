@@ -9,6 +9,7 @@ import 'package:webview_flutter_android/webview_flutter_android.dart';
 import '../config.dart';
 import '../services/ad_shield.dart';
 import '../services/download_manager.dart';
+import '../services/subscription_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/download_notice.dart';
 import '../widgets/glass.dart';
@@ -392,11 +393,13 @@ return JSON.stringify(out.slice(0,12));})()''';
         ..showSnackBar(SnackBar(
           content: Text(error),
           duration: const Duration(seconds: 8),
-          action: SnackBarAction(
-            label: 'OPEN IN BROWSER',
-            textColor: Ui.redSoft,
-            onPressed: () => openExternally(url),
-          ),
+          action: SubscriptionService.instance.isPremium
+              ? SnackBarAction(
+                  label: 'OPEN IN BROWSER',
+                  textColor: Ui.redSoft,
+                  onPressed: () => openExternally(url),
+                )
+              : null,
         ));
       return;
     }
@@ -527,12 +530,18 @@ return JSON.stringify(out.slice(0,12));})()''';
                       },
                       icon: const Icon(Icons.refresh_rounded),
                     ),
+                    // "Download this link" and "Open in browser" are for
+                    // premium (ad-free) members only. Everyone else downloads
+                    // with the buttons on the page and saves the file from the
+                    // Downloads tab.
+                    if (widget.blockAds || SubscriptionService.instance.isPremium)
                     PopupMenuButton<String>(
                       color: Ui.panel,
                       icon: const Icon(Icons.more_vert_rounded),
                       onSelected: (v) {
-                        if (v == 'external') _external();
-                        if (v == 'download') _startDownload(_url);
+                        final premium = SubscriptionService.instance.isPremium;
+                        if (v == 'external' && premium) _external();
+                        if (v == 'download' && premium) _startDownload(_url);
                         if (v == 'ads') setState(() => _blockOn = !_blockOn);
                       },
                       itemBuilder: (_) => [
@@ -550,6 +559,7 @@ return JSON.stringify(out.slice(0,12));})()''';
                                   : 'Ad redirects: allowed'),
                             ),
                           ),
+                        if (SubscriptionService.instance.isPremium)
                         const PopupMenuItem(
                           value: 'download',
                           child: ListTile(
@@ -559,6 +569,7 @@ return JSON.stringify(out.slice(0,12));})()''';
                             title: Text('Download this link'),
                           ),
                         ),
+                        if (SubscriptionService.instance.isPremium)
                         const PopupMenuItem(
                           value: 'external',
                           child: ListTile(
@@ -629,13 +640,14 @@ return JSON.stringify(out.slice(0,12));})()''';
                                       size: 18),
                                   label: const Text('Retry'),
                                 ),
-                                OutlinedButton.icon(
-                                  onPressed: _external,
-                                  icon: const Icon(
-                                      Icons.open_in_browser_rounded,
-                                      size: 18),
-                                  label: const Text('Open in browser'),
-                                ),
+                                if (SubscriptionService.instance.isPremium)
+                                  OutlinedButton.icon(
+                                    onPressed: _external,
+                                    icon: const Icon(
+                                        Icons.open_in_browser_rounded,
+                                        size: 18),
+                                    label: const Text('Open in browser'),
+                                  ),
                               ],
                             ),
                           ],
