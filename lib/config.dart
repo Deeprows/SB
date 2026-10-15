@@ -195,6 +195,11 @@ class AppConfig {
   ///   {altEmbedBase}/tv/{tmdb id}/1/1
   static const altEmbedBase = 'https://web.nxsha.app/embed';
 
+  /// Third player on the Switch button (1/3 -> 2/3 -> 3/3):
+  ///   {thirdEmbedBase}/movie/{tmdb id}
+  ///   {thirdEmbedBase}/tv/{tmdb id}/1/1
+  static const thirdEmbedBase = 'https://vidsrc.mov/embed';
+
   /// Download links:  {downloadBase}/movie/{tmdb id}  and
   ///                  {downloadBase}/tv/{tmdb id}
   static const downloadBase = 'https://web.nxsha.app/dl';
