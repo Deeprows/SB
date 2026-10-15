@@ -166,6 +166,8 @@ class RemoteConfig with WidgetsBindingObserver {
       _base(_str('movies', 'embedBase', AppConfig.embedBase));
   String get altEmbedBase =>
       _base(_str('movies', 'altEmbedBase', AppConfig.altEmbedBase));
+  String get thirdEmbedBase =>
+      _base(_str('movies', 'thirdEmbedBase', AppConfig.thirdEmbedBase));
   String get downloadBase =>
       _base(_str('movies', 'downloadBase', AppConfig.downloadBase));
 
