@@ -15,6 +15,7 @@ import '../services/tmdb_service.dart';
 import '../theme/app_theme.dart';
 import '../utils/l10n.dart';
 import '../utils/open_movie.dart';
+import '../widgets/latest_trailers_row.dart';
 import '../widgets/app_refresh.dart';
 import '../widgets/glass.dart';
 import '../widgets/netflix_widgets.dart';
@@ -599,7 +600,10 @@ class _MoviesScreenState extends State<MoviesScreen> {
             child: Column(
               children: [
                 for (final r in rows)
-                  Padding(padding: const EdgeInsets.only(bottom: 24), child: r),
+                  Padding(
+                      key: r.key,
+                      padding: const EdgeInsets.only(bottom: 24),
+                      child: r),
               ],
             ),
           ),
@@ -815,6 +819,12 @@ class _MoviesScreenState extends State<MoviesScreen> {
       ..sort((a, b) => b.date!.compareTo(a.date!));
 
     add('Continue Watching'.tr, lib.history.map((e) => e.movie));
+    // Latest Trailers sits right under Continue Watching (or at the top when
+    // there is no Continue Watching row yet).
+    if (TmdbService.enabled) {
+      out.add(LatestTrailersRow(
+          key: const ValueKey('latest-trailers'), onOpen: _details));
+    }
     if (_trending.isNotEmpty) {
       add('Trending Now'.tr, _trending);
       add('Top 10 Today'.tr, _trending, numbered: true, max: 10, min: 5);
