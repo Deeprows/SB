@@ -15,7 +15,7 @@ downloader refuses to start:
     progress notification (title, percent, progress bar). It also posts the
     "Download finished" / "Download failed" notification.
   * MainActivity.kt                - `footbolive/dlservice` MethodChannel
-    (start / update / stop / result) used by lib/services/download_notifier.dart
+    (start / update / stop / result / saveToDownloads) used by lib/services/download_notifier.dart
   * AndroidManifest.xml            - the service + WAKE_LOCK and
     FOREGROUND_SERVICE_DATA_SYNC permissions
 Safe to run more than once.
@@ -240,6 +240,46 @@ if "setupDownloads" not in src:
         "super.configureFlutterEngine(flutterEngine)",
         "super.configureFlutterEngine(flutterEngine)\n        setupDownloads(flutterEngine)", 1)
     method = '''
+    /** Copies a finished download into the phone's Downloads/DamiMovies folder. */
+    private fun copyToDownloads(path: String, name: String): String? {
+        val src = java.io.File(path)
+        if (!src.exists()) return null
+        val ext = name.substringAfterLast('.', "").lowercase()
+        val mime = android.webkit.MimeTypeMap.getSingleton()
+            .getMimeTypeFromExtension(ext) ?: "application/octet-stream"
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = android.content.ContentValues().apply {
+                put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, name)
+                put(android.provider.MediaStore.MediaColumns.MIME_TYPE, mime)
+                put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, "Download/DamiMovies")
+                put(android.provider.MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+            val resolver = contentResolver
+            val uri = resolver.insert(
+                android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values
+            ) ?: return null
+            try {
+                val out = resolver.openOutputStream(uri) ?: return null
+                out.use { o -> src.inputStream().use { it.copyTo(o) } }
+                values.clear()
+                values.put(android.provider.MediaStore.MediaColumns.IS_PENDING, 0)
+                resolver.update(uri, values, null, null)
+            } catch (e: Exception) {
+                try { resolver.delete(uri, null, null) } catch (x: Exception) {}
+                return null
+            }
+        } else {
+            val dir = java.io.File(
+                android.os.Environment.getExternalStoragePublicDirectory(
+                    android.os.Environment.DIRECTORY_DOWNLOADS
+                ), "DamiMovies"
+            )
+            dir.mkdirs()
+            src.copyTo(java.io.File(dir, name), overwrite = true)
+        }
+        return "Download/DamiMovies"
+    }
+
     private fun setupDownloads(flutterEngine: FlutterEngine) {
         val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "footbolive/dlservice")
         channel.setMethodCallHandler { call, result ->
@@ -277,6 +317,18 @@ if "setupDownloads" not in src:
                     } catch (e: Exception) {
                     }
                     result.success(true)
+                }
+                "saveToDownloads" -> {
+                    val path = call.argument<String>("path")
+                    val name = call.argument<String>("name") ?: "video.mp4"
+                    if (path == null) {
+                        result.success(null)
+                    } else {
+                        Thread {
+                            val saved = try { copyToDownloads(path, name) } catch (e: Exception) { null }
+                            runOnUiThread { result.success(saved) }
+                        }.start()
+                    }
                 }
                 "result" -> {
                     DownloadService.showResult(
