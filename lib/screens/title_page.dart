@@ -12,6 +12,7 @@ import '../utils/l10n.dart';
 import '../utils/open_movie.dart';
 import '../widgets/glass.dart';
 import '../widgets/movie_card.dart' show MoviePoster, initialsOf;
+import '../widgets/download_notice.dart';
 import '../widgets/profile_sheets.dart';
 import '../widgets/rate_this.dart';
 import '../services/download_manager.dart';
@@ -125,6 +126,17 @@ class _TitlePageState extends State<TitlePage> {
     if (error != null) {
       messenger.showSnackBar(SnackBar(content: Text(error)));
       return;
+    }
+    if (await DownloadManager.instance.takeInAppNotice()) {
+      if (!mounted) return;
+      final view = await showInAppDownloadNotice(context);
+      if (!mounted) return;
+      if (view) {
+        await Navigator.of(context).push(MaterialPageRoute<void>(
+          builder: (_) => const DownloadsScreen(),
+        ));
+        return;
+      }
     }
     messenger.showSnackBar(SnackBar(
       content: Text('Download started'.tr),
