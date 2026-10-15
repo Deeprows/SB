@@ -30,6 +30,9 @@ class PlayerScreen extends StatefulWidget {
   final String? subtitle;
   final String url;
   final String? altUrl;
+
+  /// Third source for the Switch button (movies and series).
+  final String? thirdUrl;
   final bool isLive;
 
   /// Optional per-stream headers (IPTV Nexus). The referer becomes the
@@ -53,6 +56,7 @@ class PlayerScreen extends StatefulWidget {
     required this.url,
     this.subtitle,
     this.altUrl,
+    this.thirdUrl,
     this.referer,
     this.userAgent,
     this.altReferer,
@@ -71,21 +75,29 @@ class _PlayerScreenState extends State<PlayerScreen>
   late final WebViewController _wc;
   final GlobalKey _videoKey = GlobalKey();
 
-  late final List<String> _sources = [
-    widget.url,
-    if (widget.altUrl != null &&
-        widget.altUrl!.trim().isNotEmpty &&
-        widget.altUrl!.trim() != widget.url.trim())
-      widget.altUrl!,
-  ];
-  late final List<String?> _referers = [
-    widget.referer,
-    if (_sources.length > 1) widget.altReferer,
-  ];
-  late final List<String?> _agents = [
-    widget.userAgent,
-    if (_sources.length > 1) widget.altUserAgent,
-  ];
+  // The streams the Switch button cycles through (1/N, 2/N, ...): the main
+  // link, then the backup, then the third player. Empty or repeated links
+  // are left out.
+  late final List<({String url, String? referer, String? agent})> _entries =
+      _buildEntries();
+  late final List<String> _sources = [for (final e in _entries) e.url];
+  late final List<String?> _referers = [for (final e in _entries) e.referer];
+  late final List<String?> _agents = [for (final e in _entries) e.agent];
+
+  List<({String url, String? referer, String? agent})> _buildEntries() {
+    final out = <({String url, String? referer, String? agent})>[
+      (url: widget.url, referer: widget.referer, agent: widget.userAgent),
+    ];
+    void add(String? url, String? referer, String? agent) {
+      final t = url?.trim() ?? '';
+      if (t.isEmpty || out.any((e) => e.url.trim() == t)) return;
+      out.add((url: url!, referer: referer, agent: agent));
+    }
+
+    add(widget.altUrl, widget.altReferer, widget.altUserAgent);
+    add(widget.thirdUrl, null, null);
+    return out;
+  }
   int _srcIdx = 0;
 
   /// Page origin for the built-in player. Uses the stream's own referer when
@@ -767,8 +779,8 @@ class _PlayerScreenState extends State<PlayerScreen>
                       SizedBox(width: 10),
                       Expanded(
                         child: Text(
-                          'Stream not loading? Tap Reload, or Switch to try the '
-                          'backup source. Pop-ups, redirects and on-screen ads are blocked '
+                          'Stream not loading? Tap Reload, or Switch to try another '
+                          'source. Pop-ups, redirects and on-screen ads are blocked '
                           'automatically.',
                           style: TextStyle(
                               color: Ui.muted, fontSize: 12.5, height: 1.45),
