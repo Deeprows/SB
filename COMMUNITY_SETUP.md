@@ -31,4 +31,24 @@ Build and install the app with the Web client ID Dart define, sign in through th
 - The token audience must match `GOOGLE_CLIENT_ID` on the Worker.
 - A typed Gmail fallback may still let someone enter the rest of the app, but it cannot post, like, comment, or access community APIs unless Google Sign-In can provide a valid ID token.
 - Posts and comments are limited to 500 characters. Post likes are unique per account.
-- Community endpoints: `GET/POST /community/posts`, `POST /community/like`, `GET/POST /community/comments`, `GET /community/people`, `GET /community/profile?email=...`.
+- Community endpoints (all need the Google ID token):
+  `GET /community/posts?kind=tweet|recommendation`, `POST /community/posts`,
+  `POST /community/delete`, `POST /community/like`,
+  `GET/POST /community/comments`, `POST /community/comments/delete`,
+  `GET /community/people`, `GET /community/profile?email=...`
+  (the profile includes the person's last tweet and last recommendation).
+- Posts come in two kinds: **Movie tweet** and **Recommendation** (a recommendation must have a movie attached). A movie can be picked from TMDB in the post box, or attached with the **Tweet** button on any movie page.
+- Owners can delete their own posts; a post owner can also delete any comment under their post.
+- Limits: 20 posts per hour and 30 comments per 10 minutes per account.
+- Databases created by the first version of the community are upgraded automatically (new columns `kind`, `movie_id`, `movie_type`); existing posts become movie tweets.
+
+## 4. Where it is in the app
+
+* Bottom bar: the **Community** tab (speech-bubbles icon) sits right after Home.
+* Menu -> **Movie Community** opens the same feed with a back button.
+* Profile tab -> **My community posts**.
+* Tap any name or picture to open that person's profile.
+
+## 5. Tests
+
+`node --no-warnings cloudflare/community.test.mjs` (Node 22+) runs the Worker community code against an in-memory database, including the upgrade of an old database.
