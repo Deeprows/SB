@@ -1,165 +1,462 @@
-import 'package:flutter/material.dart';
-import '../services/auth_service.dart';
-import '../services/community_service.dart';
-import '../theme/app_theme.dart';
+import 'dart:async';
+import 'dart:convert';
 
-class CommunityScreen extends StatefulWidget {
-  const CommunityScreen({super.key});
-  @override
-  State<CommunityScreen> createState() => _CommunityScreenState();
-}
+import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 
-class _CommunityScreenState extends State<CommunityScreen> with AutomaticKeepAliveClientMixin {
-  final _api = CommunityService.instance;
-  final _composer = TextEditingController();
-  List<Map<String, dynamic>> _posts = [];
-  bool _loading = true, _sending = false;
-  String? _error;
-  @override bool get wantKeepAlive => true;
-  @override void initState() { super.initState(); _load(); }
-  @override void dispose() { _composer.dispose(); super.dispose(); }
+import '../config.dart';
+import '../models/movie.dart';
+import 'auth_service.dart';
 
-  Future<void> _load() async {
-    setState(() { _loading = true; _error = null; });
-    try { final p = await _api.posts(); if (mounted) setState(() => _posts = p); }
-    catch (e) { if (mounted) setState(() => _error = e.toString().replaceFirst('Exception: ', '')); }
-    if (mounted) setState(() => _loading = false);
-  }
+/// Something went wrong talking to the community; [message] is safe to show.
+class CommunityException implements Exception {
+  final String code;
+  const CommunityException(this.code);
 
-  Future<void> _post() async {
-    final text = _composer.text.trim(); if (text.isEmpty || _sending) return;
-    setState(() => _sending = true);
-    try { await _api.createPost(text); _composer.clear(); await _load(); }
-    catch (e) { _message(e.toString().replaceFirst('Exception: ', '')); }
-    if (mounted) setState(() => _sending = false);
-  }
-  void _message(String text) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text))); }
-
-  @override Widget build(BuildContext context) {
-    super.build(context);
-    final user = AuthService.instance.user;
-    return Scaffold(
-      backgroundColor: Ui.bg,
-      appBar: AppBar(title: const Text('Movie Community', style: TextStyle(fontWeight: FontWeight.w900)), backgroundColor: Ui.bg,
-        actions: [IconButton(tooltip: 'People', icon: const Icon(Icons.people_alt_outlined), onPressed: _showPeople), IconButton(tooltip: 'Refresh', icon: const Icon(Icons.refresh_rounded), onPressed: _load)]),
-      body: Column(children: [
-        Container(margin: const EdgeInsets.fromLTRB(12, 8, 12, 10), padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Ui.card, borderRadius: BorderRadius.circular(18), border: Border.all(color: Ui.line)),
-          child: Column(children: [Row(children: [CircleAvatar(backgroundImage: user?.photoUrl != null ? NetworkImage(user!.photoUrl!) : null, child: user?.photoUrl == null ? const Icon(Icons.person) : null), const SizedBox(width: 10), const Expanded(child: Text('What movie is worth watching?', style: TextStyle(fontWeight: FontWeight.w800)))]), const SizedBox(height: 10), TextField(controller: _composer, minLines: 2, maxLines: 5, maxLength: 500, decoration: const InputDecoration(hintText: 'Share a movie tweet or recommendation…', border: OutlineInputBorder()),), Align(alignment: Alignment.centerRight, child: FilledButton.icon(onPressed: _sending ? null : _post, icon: const Icon(Icons.send_rounded, size: 17), label: Text(_sending ? 'Posting…' : 'Post')))])),
-        Expanded(child: _loading ? const Center(child: CircularProgressIndicator()) : _error != null ? _emptyError() : _posts.isEmpty ? const Center(child: Text('No movie tweets yet. Be the first to post!')) : RefreshIndicator(onRefresh: _load, child: ListView.separated(padding: const EdgeInsets.fromLTRB(12, 2, 12, 24), itemCount: _posts.length, separatorBuilder: (_, _) => const SizedBox(height: 10), itemBuilder: (_, i) => _postCard(_posts[i]))))
-      ]),
-    );
-  }
-
-  Widget _emptyError() => Center(child: Padding(padding: const EdgeInsets.all(28), child: Column(mainAxisSize: MainAxisSize.min, children: [const Icon(Icons.cloud_off_rounded, size: 42), const SizedBox(height: 12), Text(_error!, textAlign: TextAlign.center), const SizedBox(height: 12), const Text('Community APIs must be deployed to your Cloudflare Worker and Google sign-in must return an ID token.', textAlign: TextAlign.center, style: TextStyle(color: Colors.white60)), const SizedBox(height: 12), FilledButton(onPressed: _load, child: const Text('Try again'))])));
-
-  Widget _postCard(Map<String, dynamic> p) {
-    final id = '${p['id']}'; final liked = p['likedByMe'] == true;
-    return Container(padding: const EdgeInsets.all(14), decoration: BoxDecoration(color: Ui.card, borderRadius: BorderRadius.circular(18), border: Border.all(color: Ui.line)), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      InkWell(onTap: () => _showProfile('${p['email'] ?? ''}'), child: Row(children: [CircleAvatar(radius: 19, backgroundImage: (p['photoUrl'] is String && '${p['photoUrl']}'.isNotEmpty) ? NetworkImage('${p['photoUrl']}') : null, child: (p['photoUrl'] == null || '${p['photoUrl']}'.isEmpty) ? const Icon(Icons.person, size: 20) : null), const SizedBox(width: 9), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('${p['name'] ?? 'Movie fan'}', style: const TextStyle(fontWeight: FontWeight.w900)), Text(_date('${p['createdAt'] ?? ''}'), style: TextStyle(color: Ui.muted, fontSize: 11))])), const Icon(Icons.chevron_right_rounded, color: Colors.white38)])),
-      const SizedBox(height: 12), Text('${p['text'] ?? ''}', style: const TextStyle(fontSize: 14, height: 1.4)),
-      if ('${p['movieTitle'] ?? ''}'.isNotEmpty) Container(margin: const EdgeInsets.only(top: 10), padding: const EdgeInsets.all(9), decoration: BoxDecoration(color: Ui.bg, borderRadius: BorderRadius.circular(12)), child: Row(children: [if ('${p['movieImage'] ?? ''}'.startsWith('http')) ClipRRect(borderRadius: BorderRadius.circular(7), child: Image.network('${p['movieImage']}', width: 42, height: 58, fit: BoxFit.cover, errorBuilder: (_, _, _) => const SizedBox(width: 42, height: 58))) else const Icon(Icons.movie_outlined, size: 40), const SizedBox(width: 10), Expanded(child: Text('${p['movieTitle']}', style: const TextStyle(fontWeight: FontWeight.bold))), if (p['rating'] != null) Text('★ ${p['rating']}/10', style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold))])),
-      const Divider(height: 22), Row(children: [TextButton.icon(onPressed: () async { try { await _api.toggleLike(id); await _load(); } catch (e) { _message('$e'); } }, icon: Icon(liked ? Icons.favorite : Icons.favorite_border, color: liked ? Colors.pinkAccent : Ui.muted), label: Text('${p['likeCount'] ?? 0}', style: TextStyle(color: liked ? Colors.pinkAccent : Ui.muted))), TextButton.icon(onPressed: () => _showComments(id), icon: const Icon(Icons.mode_comment_outlined), label: Text('${p['commentCount'] ?? 0}')), const Spacer(), IconButton(tooltip: 'View profile', onPressed: () => _showProfile('${p['email'] ?? ''}'), icon: const Icon(Icons.account_circle_outlined))])
-    ]));
-  }
-
-  String _date(String raw) { final d = DateTime.tryParse(raw); if (d == null) return 'Recently'; final diff = DateTime.now().difference(d.toLocal()); if (diff.inMinutes < 1) return 'Just now'; if (diff.inHours < 1) return '${diff.inMinutes}m ago'; if (diff.inDays < 1) return '${diff.inHours}h ago'; return '${diff.inDays}d ago'; }
-
-  Future<void> _showComments(String id) async {
-    final input = TextEditingController();
-    try {
-      await showModalBottomSheet<void>(
-        context: context,
-        isScrollControlled: true,
-        backgroundColor: Ui.card,
-        builder: (ctx) => SafeArea(
-          child: Padding(
-            padding: EdgeInsets.fromLTRB(
-              16,
-              16,
-              16,
-              MediaQuery.of(ctx).viewInsets.bottom + 16,
-            ),
-            child: SizedBox(
-              height: MediaQuery.of(ctx).size.height * .65,
-              child: Column(
-                children: [
-                  const Text(
-                    'Comments',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
-                  ),
-                  const SizedBox(height: 12),
-                  Expanded(
-                    child: FutureBuilder<List<Map<String, dynamic>>>(
-                      future: _api.comments(id),
-                      builder: (context, snapshot) {
-                        if (snapshot.connectionState == ConnectionState.waiting) {
-                          return const Center(child: CircularProgressIndicator());
-                        }
-                        if (snapshot.hasError) {
-                          return Center(child: Text('${snapshot.error}'));
-                        }
-                        final rows = snapshot.data ?? [];
-                        if (rows.isEmpty) {
-                          return const Center(child: Text('Be the first to comment.'));
-                        }
-                        return ListView(
-                          children: rows.map((comment) {
-                            final name = '${comment['name'] ?? 'Movie fan'}';
-                            final initial = name.isNotEmpty ? name.characters.first : 'M';
-                            return ListTile(
-                              leading: CircleAvatar(child: Text(initial)),
-                              title: Text(name),
-                              subtitle: Text('${comment['text'] ?? ''}'),
-                            );
-                          }).toList(),
-                        );
-                      },
-                    ),
-                  ),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: input,
-                          maxLength: 500,
-                          decoration: const InputDecoration(hintText: 'Write a comment…'),
-                        ),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.send_rounded),
-                        onPressed: () async {
-                          final text = input.text.trim();
-                          if (text.isEmpty) return;
-                          try {
-                            await _api.comment(id, text);
-                            input.clear();
-                            if (ctx.mounted) Navigator.pop(ctx);
-                            await _load();
-                            if (mounted) _showComments(id);
-                          } catch (error) {
-                            _message('$error');
-                          }
-                        },
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      );
-    } finally {
-      input.dispose();
+  String get message {
+    switch (code) {
+      case 'google_required':
+      case 'google_verification_required':
+        return 'Sign in with Google to use the community.';
+      case 'network':
+        return 'No connection. Please try again.';
+      case 'slow_down':
+        return 'You are going too fast. Try again in a bit.';
+      case 'recommendation_needs_a_movie':
+        return 'Pick a movie to recommend.';
+      case 'unavailable':
+        return 'The community is not set up yet.';
+      default:
+        return 'Something went wrong. Please try again.';
     }
   }
 
-  Future<void> _showPeople() async {
-    try { final people = await _api.people(); if (!mounted) return; showModalBottomSheet<void>(context: context, backgroundColor: Ui.card, builder: (ctx) => SafeArea(child: SizedBox(height: MediaQuery.of(ctx).size.height * .65, child: ListView(padding: const EdgeInsets.all(12), children: [const Padding(padding: EdgeInsets.all(8), child: Text('Movie fans', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900))), ...people.map((p) => ListTile(leading: CircleAvatar(backgroundImage: p['photoUrl'] != null ? NetworkImage('${p['photoUrl']}') : null, child: p['photoUrl'] == null ? const Icon(Icons.person) : null), title: Text('${p['name']}'), subtitle: Text('${p['postCount'] ?? 0} movie tweets'), onTap: () { Navigator.pop(ctx); _showProfile('${p['email']}'); }))])))); } catch (e) { _message('$e'); }
+  @override
+  String toString() => message;
+}
+
+int? _int(dynamic v) => v is num ? v.toInt() : int.tryParse('$v');
+bool _bool(dynamic v) => v == true || v == 1 || v == '1';
+String _str(dynamic v) => v == null ? '' : '$v';
+DateTime _at(dynamic v) =>
+    DateTime.fromMillisecondsSinceEpoch((_int(v) ?? 0) * 1000);
+
+/// One movie tweet or recommendation. One shared object per post, so a like
+/// or comment shows everywhere the post appears.
+class CommunityPost {
+  final String id;
+  final String email;
+  String name;
+  String photoUrl;
+  final bool recommendation;
+  final String text;
+  final String movieTitle;
+  final String movieImage;
+  final int? movieId;
+  final bool movieTv;
+
+  /// 0-10, null = no rating.
+  final int? rating;
+  final DateTime createdAt;
+  int likeCount;
+  int commentCount;
+  bool likedByMe;
+  bool mine;
+
+  CommunityPost({
+    required this.id,
+    required this.email,
+    required this.name,
+    required this.photoUrl,
+    required this.recommendation,
+    required this.text,
+    required this.movieTitle,
+    required this.movieImage,
+    required this.movieId,
+    required this.movieTv,
+    required this.rating,
+    required this.createdAt,
+    required this.likeCount,
+    required this.commentCount,
+    required this.likedByMe,
+    required this.mine,
+  });
+
+  bool get hasMovie => movieTitle.isNotEmpty;
+
+  /// The title as a playable [Movie] (null when it has no TMDB id).
+  Movie? get movie => movieId == null
+      ? null
+      : Movie.tryParse({
+          'tmdbId': movieId,
+          'type': movieTv ? 'tv' : 'movie',
+          'name': movieTitle,
+          'image': movieImage,
+        });
+
+  void _copyFrom(CommunityPost o) {
+    name = o.name;
+    photoUrl = o.photoUrl;
+    likeCount = o.likeCount;
+    commentCount = o.commentCount;
+    likedByMe = o.likedByMe;
+    mine = o.mine;
   }
 
-  Future<void> _showProfile(String email) async {
-    if (email.isEmpty) return;
-    try { final p = await _api.profile(email); if (!mounted) return; showModalBottomSheet<void>(context: context, isScrollControlled: true, backgroundColor: Ui.card, builder: (ctx) => SafeArea(child: SizedBox(height: MediaQuery.of(ctx).size.height * .75, child: ListView(padding: const EdgeInsets.all(18), children: [Row(children: [CircleAvatar(radius: 32, backgroundImage: p['photoUrl'] != null ? NetworkImage('${p['photoUrl']}') : null, child: p['photoUrl'] == null ? const Icon(Icons.person, size: 30) : null), const SizedBox(width: 12), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('${p['name']}', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900)), Text('${p['postCount'] ?? 0} movie tweets', style: TextStyle(color: Ui.muted))]))]), if ('${p['bio'] ?? ''}'.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 12), child: Text('${p['bio']}')), const Padding(padding: EdgeInsets.only(top: 22, bottom: 8), child: Text('Latest movie tweets', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16))), ...((p['posts'] as List? ?? []).map((x) => Card(child: Padding(padding: const EdgeInsets.all(12), child: Text('${x['text']}')))))])))); } catch (e) { _message('$e'); }
+  static CommunityPost? tryParse(dynamic j) {
+    if (j is! Map) return null;
+    final id = _str(j['id']);
+    if (id.isEmpty) return null;
+    final name = _str(j['name']).trim();
+    return CommunityPost(
+      id: id,
+      email: _str(j['email']),
+      name: name.isEmpty ? 'Movie fan' : name,
+      photoUrl: _str(j['photoUrl']),
+      recommendation: _str(j['kind']) == 'recommendation',
+      text: _str(j['text']),
+      movieTitle: _str(j['movieTitle']),
+      movieImage: _str(j['movieImage']),
+      movieId: _int(j['movieId']),
+      movieTv: _str(j['movieType']) == 'tv',
+      rating: _int(j['rating']),
+      createdAt: _at(j['createdAt']),
+      likeCount: _int(j['likeCount']) ?? 0,
+      commentCount: _int(j['commentCount']) ?? 0,
+      likedByMe: _bool(j['likedByMe']),
+      mine: _bool(j['mine']),
+    );
+  }
+}
+
+class CommunityComment {
+  final String id;
+  final String email;
+  final String name;
+  final String photoUrl;
+  final String text;
+  final DateTime createdAt;
+  final bool mine;
+  final bool canDelete;
+
+  const CommunityComment({
+    required this.id,
+    required this.email,
+    required this.name,
+    required this.photoUrl,
+    required this.text,
+    required this.createdAt,
+    required this.mine,
+    required this.canDelete,
+  });
+
+  static CommunityComment? tryParse(dynamic j) {
+    if (j is! Map) return null;
+    final id = _str(j['id']);
+    if (id.isEmpty) return null;
+    final name = _str(j['name']).trim();
+    return CommunityComment(
+      id: id,
+      email: _str(j['email']),
+      name: name.isEmpty ? 'Movie fan' : name,
+      photoUrl: _str(j['photoUrl']),
+      text: _str(j['text']),
+      createdAt: _at(j['createdAt']),
+      mine: _bool(j['mine']),
+      canDelete: _bool(j['canDelete']),
+    );
+  }
+}
+
+class CommunityPerson {
+  final String email;
+  final String name;
+  final String photoUrl;
+  final int postCount;
+  const CommunityPerson(this.email, this.name, this.photoUrl, this.postCount);
+}
+
+/// Someone's public profile: counts, last tweet, last recommendation.
+class CommunityProfile {
+  final String email;
+  final String name;
+  final String photoUrl;
+  final String bio;
+  final bool mine;
+  final int postCount;
+  final int likeCount;
+  final CommunityPost? lastTweet;
+  final CommunityPost? lastRecommendation;
+  final List<CommunityPost> posts;
+
+  const CommunityProfile({
+    required this.email,
+    required this.name,
+    required this.photoUrl,
+    required this.bio,
+    required this.mine,
+    required this.postCount,
+    required this.likeCount,
+    required this.lastTweet,
+    required this.lastRecommendation,
+    required this.posts,
+  });
+}
+
+/// The movie community (tweets, recommendations, likes, comments, profiles).
+/// Every call carries a Google ID token that the Worker verifies, see
+/// COMMUNITY_SETUP.md.
+class CommunityService extends ChangeNotifier {
+  CommunityService._();
+  static final CommunityService instance = CommunityService._();
+
+  final Map<String, CommunityPost> _cache = {};
+  final List<CommunityPost> _feed = [];
+  String _kind = ''; // '' = all, 'tweet', 'recommendation'
+  bool _loading = false;
+  bool _loaded = false;
+  String? _error;
+
+  List<CommunityPost> get feed => List.unmodifiable(_feed);
+  String get kind => _kind;
+  bool get loading => _loading;
+  bool get loaded => _loaded;
+  String? get error => _error;
+
+  String get _base => AppConfig.feedBase.trim().replaceAll(RegExp(r'/+$'), '');
+  bool get available => _base.isNotEmpty;
+  bool get signedIn => AuthService.instance.user != null;
+
+  // ------------------------------------------------------------------ http
+
+  Future<dynamic> _request(String path,
+      {Map<String, dynamic>? body}) async {
+    if (!available) throw const CommunityException('unavailable');
+    final token = await AuthService.instance.googleIdToken();
+    if (token == null) throw const CommunityException('google_required');
+    final headers = {
+      'authorization': 'Bearer $token',
+      if (body != null) 'content-type': 'application/json',
+    };
+    final uri = Uri.parse('$_base$path');
+    final http.Response res;
+    try {
+      res = body != null
+          ? await http
+              .post(uri, headers: headers, body: jsonEncode(body))
+              .timeout(const Duration(seconds: 15))
+          : await http
+              .get(uri, headers: headers)
+              .timeout(const Duration(seconds: 15));
+    } catch (_) {
+      throw const CommunityException('network');
+    }
+    dynamic data;
+    try {
+      data = jsonDecode(res.body);
+    } catch (_) {}
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      final code = data is Map ? _str(data['error']) : '';
+      throw CommunityException(res.statusCode == 503 ? 'unavailable' : code);
+    }
+    return data;
+  }
+
+  CommunityPost _intern(CommunityPost p) {
+    final old = _cache[p.id];
+    if (old == null) {
+      _cache[p.id] = p;
+      return p;
+    }
+    old._copyFrom(p);
+    return old;
+  }
+
+  List<CommunityPost> _posts(dynamic raw) {
+    final out = <CommunityPost>[];
+    if (raw is List) {
+      for (final row in raw) {
+        final p = CommunityPost.tryParse(row);
+        if (p != null) out.add(_intern(p));
+      }
+    }
+    return out;
+  }
+
+  // ------------------------------------------------------------------ feed
+
+  /// Loads the feed ([kind]: '' all, 'tweet', 'recommendation').
+  Future<void> load({String? kind}) async {
+    if (kind != null) _kind = kind;
+    _loading = true;
+    _error = null;
+    notifyListeners();
+    final asked = _kind;
+    try {
+      final d = await _request(
+          '/community/posts${asked.isEmpty ? '' : '?kind=$asked'}');
+      if (asked == _kind) {
+        _feed
+          ..clear()
+          ..addAll(_posts(d is Map ? d['posts'] : null));
+      }
+    } on CommunityException catch (e) {
+      _error = e.message;
+    }
+    _loaded = true;
+    _loading = false;
+    notifyListeners();
+  }
+
+  /// Publishes a post. [rating] is 0-10.
+  Future<CommunityPost> post({
+    required String text,
+    required bool recommendation,
+    Movie? movie,
+    int? rating,
+  }) async {
+    final id = movie == null
+        ? null
+        : (movie.tmdbId ??
+            int.tryParse(
+                RegExp(r'/(?:movie|tv)/(\d+)').firstMatch(movie.url)?.group(1) ??
+                    ''));
+    final d = await _request('/community/posts', body: {
+      'text': text.trim(),
+      'kind': recommendation ? 'recommendation' : 'tweet',
+      if (movie != null) 'movieTitle': movie.title,
+      if (movie != null && movie.image.startsWith('https://'))
+        'movieImage': movie.image,
+      if (id != null) 'movieId': id,
+      if (movie != null) 'movieType': movie.isSeries ? 'tv' : 'movie',
+      if (movie != null && rating != null && rating > 0) 'rating': rating,
+    });
+    final p = CommunityPost.tryParse(d is Map ? d['post'] : null);
+    if (p == null) throw const CommunityException('');
+    final mine = _intern(p);
+    if (_kind.isEmpty || (_kind == 'recommendation') == mine.recommendation) {
+      _feed.insert(0, mine);
+    }
+    notifyListeners();
+    return mine;
+  }
+
+  Future<void> deletePost(CommunityPost p) async {
+    await _request('/community/delete', body: {'postId': p.id});
+    _feed.removeWhere((x) => x.id == p.id);
+    _cache.remove(p.id);
+    notifyListeners();
+  }
+
+  /// Heart / un-heart. Changes at once; put back if the server refuses.
+  Future<void> toggleLike(CommunityPost p) async {
+    final was = p.likedByMe;
+    final count = p.likeCount;
+    p.likedByMe = !was;
+    p.likeCount = was ? (count > 0 ? count - 1 : 0) : count + 1;
+    notifyListeners();
+    try {
+      final d = await _request('/community/like', body: {'postId': p.id});
+      if (d is Map) {
+        p.likedByMe = _bool(d['liked']);
+        p.likeCount = _int(d['likeCount']) ?? p.likeCount;
+      }
+    } catch (_) {
+      p.likedByMe = was;
+      p.likeCount = count;
+      notifyListeners();
+      rethrow;
+    }
+    notifyListeners();
+  }
+
+  // -------------------------------------------------------------- comments
+
+  Future<List<CommunityComment>> comments(CommunityPost p) async {
+    final d = await _request(
+        '/community/comments?postId=${Uri.encodeQueryComponent(p.id)}');
+    final out = <CommunityComment>[];
+    final raw = d is Map ? d['comments'] : null;
+    if (raw is List) {
+      for (final row in raw) {
+        final c = CommunityComment.tryParse(row);
+        if (c != null) out.add(c);
+      }
+    }
+    if (p.commentCount != out.length) {
+      p.commentCount = out.length;
+      notifyListeners();
+    }
+    return out;
+  }
+
+  Future<void> addComment(CommunityPost p, String text) async {
+    final d = await _request('/community/comments',
+        body: {'postId': p.id, 'text': text.trim()});
+    p.commentCount = d is Map ? (_int(d['commentCount']) ?? p.commentCount + 1) : p.commentCount + 1;
+    notifyListeners();
+  }
+
+  Future<void> deleteComment(CommunityPost p, CommunityComment c) async {
+    await _request('/community/comments/delete', body: {'id': c.id});
+    if (p.commentCount > 0) p.commentCount -= 1;
+    notifyListeners();
+  }
+
+  // -------------------------------------------------------------- profiles
+
+  Future<CommunityProfile> profile(String email) async {
+    final d = await _request(
+        '/community/profile?email=${Uri.encodeQueryComponent(email)}');
+    final j = d is Map ? d['profile'] : null;
+    if (j is! Map) throw const CommunityException('');
+    CommunityPost? one(dynamic raw) {
+      final p = CommunityPost.tryParse(raw);
+      return p == null ? null : _intern(p);
+    }
+
+    final name = _str(j['name']).trim();
+    return CommunityProfile(
+      email: _str(j['email']),
+      name: name.isEmpty ? 'Movie fan' : name,
+      photoUrl: _str(j['photoUrl']),
+      bio: _str(j['bio']),
+      mine: _bool(j['mine']),
+      postCount: _int(j['postCount']) ?? 0,
+      likeCount: _int(j['likeCount']) ?? 0,
+      lastTweet: one(j['lastTweet']),
+      lastRecommendation: one(j['lastRecommendation']),
+      posts: _posts(j['posts']),
+    );
+  }
+
+  Future<List<CommunityPerson>> people() async {
+    final d = await _request('/community/people');
+    final out = <CommunityPerson>[];
+    final raw = d is Map ? d['people'] : null;
+    if (raw is List) {
+      for (final r in raw) {
+        if (r is! Map) continue;
+        final email = _str(r['email']);
+        if (email.isEmpty) continue;
+        final name = _str(r['name']).trim();
+        out.add(CommunityPerson(
+          email,
+          name.isEmpty ? email.split('@').first : name,
+          _str(r['photoUrl']),
+          _int(r['postCount']) ?? 0,
+        ));
+      }
+    }
+    return out;
+  }
+
+  /// Forget what is shown (on sign out).
+  void clear() {
+    _cache.clear();
+    _feed.clear();
+    _loaded = false;
+    _error = null;
+    notifyListeners();
   }
 }
