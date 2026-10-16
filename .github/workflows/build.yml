@@ -259,7 +259,12 @@ jobs:
           echo "Building version $V"
 
       - name: Build signed release APK
+        env:
+          GSCI: ${{ secrets.GOOGLE_SERVER_CLIENT_ID }}
         run: |
+          # Strip any stray spaces/newlines pasted into the secret; a newline
+          # there would split the flutter command in two.
+          GID="$(printf '%s' "$GSCI" | tr -d '[:space:]')"
           # --build-number grows with every run so a new APK always installs
           # over the old one as an update.
           # Size: ship only the two ABIs real phones use (32-bit + 64-bit ARM).
@@ -271,7 +276,7 @@ jobs:
             --build-name="${{ steps.ver.outputs.version }}" \
             --build-number="${{ github.run_number }}" \
             --dart-define=APP_VERSION="${{ steps.ver.outputs.version }}" \
-            --dart-define=GOOGLE_SERVER_CLIENT_ID="${{ secrets.GOOGLE_SERVER_CLIENT_ID }}"
+            --dart-define=GOOGLE_SERVER_CLIENT_ID="$GID"
 
       # ---------------------------------------------------------------
       # Verify output
