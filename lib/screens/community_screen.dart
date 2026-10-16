@@ -66,8 +66,92 @@ class _CommunityScreenState extends State<CommunityScreen> with AutomaticKeepAli
 
   Future<void> _showComments(String id) async {
     final input = TextEditingController();
-    await showModalBottomSheet<void>(context: context, isScrollControlled: true, backgroundColor: Ui.card, builder: (ctx) => SafeArea(child: Padding(padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(ctx).viewInsets.bottom + 16), child: SizedBox(height: MediaQuery.of(ctx).size.height * .65, child: Column(children: [const Text('Comments', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)), const SizedBox(height: 12), Expanded(child: FutureBuilder<List<Map<String, dynamic>>>(future: _api.comments(id), builder: (_, snap) { if (snap.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator()); if (snap.hasError) return Center(child: Text('${snap.error}')); final rows = snap.data ?? []; if (rows.isEmpty) return const Center(child: Text('Be the first to comment.')); return ListView(children: rows.map((c) => ListTile(leading: CircleAvatar(child: Text('${c['name'] ?? 'M'}'.characters.first)), title: Text('${c['name'] ?? 'Movie fan'}'), subtitle: Text('${c['text'] ?? ''}')).toList()); })), Row(children: [Expanded(child: TextField(controller: input, maxLength: 500, decoration: const InputDecoration(hintText: 'Write a comment…'))), IconButton(icon: const Icon(Icons.send_rounded), onPressed: () async { final t = input.text.trim(); if (t.isEmpty) return; try { await _api.comment(id, t); input.clear(); if (ctx.mounted) Navigator.pop(ctx); await _load(); if (mounted) _showComments(id); } catch (e) { _message('$e'); } })])]))));
-    input.dispose();
+    try {
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Ui.card,
+        builder: (ctx) => SafeArea(
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+              16,
+              16,
+              16,
+              MediaQuery.of(ctx).viewInsets.bottom + 16,
+            ),
+            child: SizedBox(
+              height: MediaQuery.of(ctx).size.height * .65,
+              child: Column(
+                children: [
+                  const Text(
+                    'Comments',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+                  ),
+                  const SizedBox(height: 12),
+                  Expanded(
+                    child: FutureBuilder<List<Map<String, dynamic>>>(
+                      future: _api.comments(id),
+                      builder: (context, snapshot) {
+                        if (snapshot.connectionState == ConnectionState.waiting) {
+                          return const Center(child: CircularProgressIndicator());
+                        }
+                        if (snapshot.hasError) {
+                          return Center(child: Text('${snapshot.error}'));
+                        }
+                        final rows = snapshot.data ?? [];
+                        if (rows.isEmpty) {
+                          return const Center(child: Text('Be the first to comment.'));
+                        }
+                        return ListView(
+                          children: rows.map((comment) {
+                            final name = '${comment['name'] ?? 'Movie fan'}';
+                            final initial = name.isNotEmpty ? name.characters.first : 'M';
+                            return ListTile(
+                              leading: CircleAvatar(child: Text(initial)),
+                              title: Text(name),
+                              subtitle: Text('${comment['text'] ?? ''}'),
+                            );
+                          }).toList(),
+                        );
+                      },
+                    ),
+                  ),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: input,
+                          maxLength: 500,
+                          decoration: const InputDecoration(hintText: 'Write a comment…'),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.send_rounded),
+                        onPressed: () async {
+                          final text = input.text.trim();
+                          if (text.isEmpty) return;
+                          try {
+                            await _api.comment(id, text);
+                            input.clear();
+                            if (ctx.mounted) Navigator.pop(ctx);
+                            await _load();
+                            if (mounted) _showComments(id);
+                          } catch (error) {
+                            _message('$error');
+                          }
+                        },
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    } finally {
+      input.dispose();
+    }
   }
 
   Future<void> _showPeople() async {
