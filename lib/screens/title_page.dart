@@ -19,6 +19,7 @@ import '../services/download_manager.dart';
 import 'browser_screen.dart' show openInApp, isDirectFileLink;
 import 'downloads_screen.dart';
 import 'trailer_screen.dart';
+import 'community_composer.dart';
 
 /// Netflix-style title page: big artwork with a play button, title, match /
 /// year / length row, white Play and grey Download buttons, synopsis, cast,
@@ -696,6 +697,11 @@ class _TitlePageState extends State<TitlePage> {
             icon: Icons.check_circle_outline_rounded,
             label: 'Check in'.tr,
             onTap: () => doCheckIn(context, widget.movie)),
+        _Action(
+            icon: Icons.forum_outlined,
+            label: 'Tweet'.tr,
+            onTap: () =>
+                showCommunityComposer(context, movie: widget.movie)),
         _Action(icon: Icons.ios_share_rounded, label: 'Share'.tr, onTap: _share),
       ],
     );
