@@ -12,12 +12,13 @@ import '../utils/l10n.dart';
 import '../widgets/app_drawer.dart';
 import '../widgets/glass.dart';
 import 'browse_screen.dart';
+import 'community_screen.dart';
 import 'downloads_screen.dart';
 import 'library_screen.dart';
 import 'movies_screen.dart';
 import 'profile_screen.dart';
 
-/// The whole app: Home, Profile, Library, Browser and Downloads.
+/// The whole app: Home, Community, Profile, Library, Browser and Downloads.
 class ShellScreen extends StatefulWidget {
   const ShellScreen({super.key});
 
@@ -101,12 +102,14 @@ class _ShellScreenState extends State<ShellScreen>
         extendBody: false,
         body: IndexedStack(
           index: _index,
-          children: const [
-            MoviesScreen(),
-            ProfileScreen(),
-            LibraryScreen(),
-            BrowseScreen(),
-            DownloadsScreen(),
+          children: [
+            const MoviesScreen(),
+            // Loads its posts the first time the tab is opened.
+            CommunityScreen(active: _index == 1),
+            const ProfileScreen(),
+            const LibraryScreen(),
+            const BrowseScreen(),
+            const DownloadsScreen(),
           ],
         ),
         bottomNavigationBar: _FloatingNav(
@@ -114,6 +117,7 @@ class _ShellScreenState extends State<ShellScreen>
           onTap: (i) => setState(() => _index = i),
           items: [
             _NavItem(Icons.home_outlined, Icons.home_rounded, 'Home'.tr),
+            _NavItem(Icons.forum_outlined, Icons.forum_rounded, 'Community'.tr),
             _NavItem(Icons.person_outline_rounded, Icons.person_rounded,
                 'Profile'.tr),
             _NavItem(
@@ -171,7 +175,7 @@ class _FloatingNav extends StatelessWidget {
         child: Row(
           children: [
             for (var i = 0; i < items.length; i++)
-              Expanded(flex: i == index ? 21 : 10, child: _tab(i)),
+              Expanded(flex: i == index ? 24 : 10, child: _tab(i)),
           ],
         ),
       ),
