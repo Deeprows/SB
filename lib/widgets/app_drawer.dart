@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../config.dart';
 import '../screens/browser_screen.dart';
+import '../screens/community_screen.dart';
 import '../screens/downloads_screen.dart';
 import '../screens/library_screen.dart';
 import '../screens/plans_screen.dart';
@@ -148,6 +149,8 @@ class DamiMoviesDrawer extends StatelessWidget {
                         (c) => _push(c, const RemoveAdsScreen())),
                 item(Icons.download_rounded, 'Downloads'.tr,
                     (c) => _push(c, const DownloadsScreen())),
+                item(Icons.forum_rounded, 'Movie Community',
+                    (c) => _push(c, const CommunityScreen())),
                 item(Icons.bookmark_rounded, 'My Library'.tr,
                     (c) => _push(c, const LibraryScreen())),
                 item(Icons.palette_rounded, 'Themes'.tr, showThemeSheet),
