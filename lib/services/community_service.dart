@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config.dart';
 import '../models/movie.dart';
@@ -16,8 +18,12 @@ class CommunityException implements Exception {
   String get message {
     switch (code) {
       case 'google_required':
+      case 'sign_in_required':
+        return 'Sign in with your Gmail to use the community.';
       case 'google_verification_required':
         return 'Sign in with Google to use the community.';
+      case 'community_key_mismatch':
+        return 'This Gmail is already used on another phone. Ask the admin to reset it.';
       case 'network':
         return 'No connection. Please try again.';
       case 'slow_down':
@@ -229,13 +235,45 @@ class CommunityService extends ChangeNotifier {
 
   // ------------------------------------------------------------------ http
 
+  static String? _key;
+
+  /// A random secret made once on this phone. The first phone to use a Gmail
+  /// locks that Gmail's community account to this secret.
+  Future<String> _phoneKey() async {
+    if (_key != null) return _key!;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      var k = prefs.getString('community_key');
+      if (k == null || k.length < 32) {
+        final r = Random.secure();
+        k = List.generate(
+                32, (_) => r.nextInt(256).toRadixString(16).padLeft(2, '0'))
+            .join();
+        await prefs.setString('community_key', k);
+      }
+      return _key = k;
+    } catch (_) {
+      return _key = List.generate(
+              32, (_) => Random.secure().nextInt(16).toRadixString(16))
+          .join();
+    }
+  }
+
   Future<dynamic> _request(String path,
       {Map<String, dynamic>? body}) async {
     if (!available) throw const CommunityException('unavailable');
+    final user = AuthService.instance.user;
+    if (user == null) throw const CommunityException('google_required');
+    // Two proofs are sent: a Google ID token when this build has one, and
+    // this phone's own key. The Worker accepts either (COMMUNITY_SETUP.md).
     final token = await AuthService.instance.googleIdToken();
-    if (token == null) throw const CommunityException('google_required');
     final headers = {
-      'authorization': 'Bearer $token',
+      if (token != null) 'authorization': 'Bearer $token',
+      'x-community-email': user.email.trim().toLowerCase(),
+      'x-community-key': await _phoneKey(),
+      'x-community-name': Uri.encodeComponent(user.name),
+      if (user.photoUrl != null && user.photoUrl!.startsWith('https://'))
+        'x-community-photo': Uri.encodeComponent(user.photoUrl!),
       if (body != null) 'content-type': 'application/json',
     };
     final uri = Uri.parse('$_base$path');
