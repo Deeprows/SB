@@ -60,6 +60,8 @@ const bob = "bob@gmail.com";
 assert.equal((await (await call(null, "/health")).json()).community, true);
 assert.equal((await call(null, "/community/posts")).status, 401);
 assert.equal((await call("nobody", "/community/posts")).status, 401);
+// a Google-only Worker never accepts a phone key
+assert.equal((await worker.fetch(new Request("https://f.example.com/community/posts", { headers: { "x-community-email": "k@gmail.com", "x-community-key": "a".repeat(32) } }), { ...env, COMMUNITY_REQUIRE_GOOGLE: "1" }, ctx)).status, 401);
 
 // old rows survive the upgrade and count as tweets
 let j = await ok(await call(ann, "/community/posts"));
@@ -122,5 +124,44 @@ assert.equal((await call(bob, "/community/delete", { postId: tweetId })).status,
 await ok(await call(ann, "/community/delete", { postId: tweetId }));
 j = await ok(await call(ann, `/community/comments?postId=${tweetId}`));
 assert.equal(j.comments.length, 0);
+
+// ---- no Google setup: the phone key is enough --------------------------------
+const noGoogle = { DB }; // no GOOGLE_CLIENT_ID
+const asPhone = (email, key, path, body) =>
+  worker.fetch(
+    new Request("https://feed.example.com" + path, {
+      method: body ? "POST" : "GET",
+      headers: { "x-community-email": email, "x-community-key": key, "x-community-name": encodeURIComponent("Zoë"), "x-community-photo": "https://example.com/z.jpg" },
+      body: body ? JSON.stringify(body) : undefined,
+    }),
+    noGoogle,
+    ctx
+  );
+const K1 = "1".repeat(32);
+const K2 = "2".repeat(32);
+const zoe = "zoe@gmail.com";
+
+// first phone claims the Gmail and can post
+j = await ok(await asPhone(zoe, K1, "/community/posts", { text: "hello from a phone", kind: "tweet" }));
+assert.equal(j.post.name, "Zoë");
+assert.equal(j.post.photoUrl, "https://example.com/z.jpg");
+assert.equal(j.post.mine, true);
+// same phone again works; another phone is refused
+assert.equal((await asPhone(zoe, K1, "/community/posts")).status, 200);
+let r = await asPhone(zoe, K2, "/community/posts");
+assert.equal(r.status, 401);
+assert.equal((await r.json()).error, "community_key_mismatch");
+// bad / missing key or non-Gmail
+assert.equal((await asPhone(zoe, "short", "/community/posts")).status, 401);
+assert.equal((await asPhone("x@yahoo.com", K1, "/community/posts")).status, 401);
+// a Google-verified login (token + client id) takes the Gmail over from a phone key
+await ok(await call(zoe, "/community/posts"));
+assert.equal((await asPhone(zoe, K2, "/community/posts")).status, 200); // key freed, K2 claims it now
+
+// admin reset frees a Gmail
+assert.equal((await worker.fetch(new Request(`https://f.example.com/community/admin/reset?token=bad&email=${zoe}`), { DB, ADMIN_TOKEN: "adm" }, ctx)).status, 403);
+r = await worker.fetch(new Request(`https://f.example.com/community/admin/reset?token=adm&email=${zoe}`), { DB, ADMIN_TOKEN: "adm" }, ctx);
+assert.equal(r.status, 200);
+assert.equal((await asPhone(zoe, K1, "/community/posts")).status, 200); // K1 claims again
 
 console.log("community: ok");
