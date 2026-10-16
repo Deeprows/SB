@@ -35,7 +35,7 @@ that is left.
 1. **Paystack** > Settings > API Keys & Webhooks
    * copy the **Secret key** (start with `sk_test_...` to try it, then switch
      to `sk_live_...`)
-   * set **Webhook URL** to `https://deeprowss-feed.deeprows.workers.dev/sub/webhook`
+   * set **Webhook URL** to `https://streambox-feed.deeprows.workers.dev/sub/webhook`
 2. *(optional, for monthly auto-renew)* Paystack > Products > **Plans** >
    Create plan: ₦2,000, monthly. Copy its plan code (`PLN_...`).
 3. **Cloudflare** > Storage & databases > **D1** > Create database
@@ -50,7 +50,7 @@ that is left.
    * `PRICE_NGN_YEAR` (optional) - yearly price, default 20000 (two months free)
    * `PAYSTACK_PLAN_CODE_YEAR` (optional) - a yearly Paystack plan for card auto-renew
 5. Paste the new `cloudflare/worker.js` into the Worker and **Deploy**.
-6. Open `https://deeprowss-feed.deeprows.workers.dev/health`. It must show
+6. Open `https://streambox-feed.deeprows.workers.dev/health`. It must show
    `"subscriptions":true`.
 7. Pay once yourself with the test key (Paystack gives test cards), then
    switch to the live key.
@@ -60,7 +60,7 @@ that is left.
 1. Put your link in `lib/config.dart`: `whatsappUrl = 'https://wa.me/<number>'`
    (country code, no `+`).
 2. When someone pays you, their WhatsApp message contains `My ID: ...`.
-3. Open `https://deeprowss-feed.deeprows.workers.dev/sub/admin?token=<ADMIN_TOKEN>`,
+3. Open `https://streambox-feed.deeprows.workers.dev/sub/admin?token=<ADMIN_TOKEN>`,
    paste the ID, enter the days (30) and press **Grant**. Enter **0** to switch
    someone off. The page also lists who is premium.
 4. The phone picks it up the next time the app opens or when the person
