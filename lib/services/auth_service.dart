@@ -271,6 +271,9 @@ class AuthService extends ChangeNotifier {
   /// Short-lived Google ID token used by the community API. The Worker verifies
   /// this token with Google before accepting any post, comment, or like.
   Future<String?> googleIdToken() async {
+    // Without a Web client ID the build can never get an ID token, so do not
+    // wait for Google; the community uses this phone's key instead.
+    if (AppConfig.googleServerClientId.isEmpty) return null;
     try {
       var account = _google.currentUser;
       account ??= await _google.signInSilently();
