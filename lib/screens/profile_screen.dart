@@ -13,6 +13,7 @@ import '../theme/app_theme.dart';
 import '../utils/l10n.dart';
 import '../utils/open_movie.dart';
 import '../widgets/app_drawer.dart' show confirmSignOut;
+import '../widgets/community_widgets.dart' show openCommunityProfile;
 import '../widgets/netflix_widgets.dart';
 import '../widgets/profile_sheets.dart';
 import 'library_screen.dart';
@@ -309,6 +310,39 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   childAspectRatio: 1.02,
                   children: [for (final t in tiles) _TileCard(tile: t)],
                 ),
+                if (user != null) ...[
+                  const SizedBox(height: 14),
+                  Material(
+                    color: Colors.white.withValues(alpha: .06),
+                    borderRadius: BorderRadius.circular(18),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(18),
+                      onTap: () => openCommunityProfile(context, user.email,
+                          name: user.name, photoUrl: user.photoUrl),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 14),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(color: Ui.glassLine),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.forum_rounded, color: Ui.redSoft),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text('My community posts'.tr,
+                                  style: const TextStyle(
+                                      fontSize: 14.5,
+                                      fontWeight: FontWeight.w800)),
+                            ),
+                            Icon(Icons.chevron_right_rounded, color: Ui.dim),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
                 if (AppConfig.loginRequired && user != null) ...[
                   const SizedBox(height: 18),
                   OutlinedButton.icon(
