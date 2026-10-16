@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../config.dart';
 import '../screens/browser_screen.dart';
 import '../screens/community_screen.dart';
+import '../services/community_service.dart';
 import '../screens/downloads_screen.dart';
 import '../screens/library_screen.dart';
 import '../screens/plans_screen.dart';
@@ -150,7 +151,7 @@ class DamiMoviesDrawer extends StatelessWidget {
                 item(Icons.download_rounded, 'Downloads'.tr,
                     (c) => _push(c, const DownloadsScreen())),
                 item(Icons.forum_rounded, 'Movie Community',
-                    (c) => _push(c, const CommunityScreen())),
+                    (c) => _push(c, const CommunityScreen(standalone: true))),
                 item(Icons.bookmark_rounded, 'My Library'.tr,
                     (c) => _push(c, const LibraryScreen())),
                 item(Icons.palette_rounded, 'Themes'.tr, showThemeSheet),
@@ -242,7 +243,10 @@ Future<void> confirmSignOut(BuildContext context) async {
       ],
     ),
   );
-  if (yes == true) await AuthService.instance.signOut();
+  if (yes == true) {
+    await AuthService.instance.signOut();
+    CommunityService.instance.clear();
+  }
 }
 
 Future<void> showLowQualityDialog(BuildContext context) async {
