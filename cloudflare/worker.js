@@ -69,7 +69,7 @@ const CORS = {
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET,HEAD,POST,OPTIONS",
   "access-control-allow-headers":
-    "content-type, authorization, x-install-id, x-app-version, x-platform",
+    "content-type, authorization, x-community-email, x-community-key, x-community-name, x-community-photo, x-install-id, x-app-version, x-platform",
 };
 
 export default {
@@ -102,7 +102,9 @@ export default {
           env.STATS_TOKEN && env.CF_ACCOUNT_ID && env.CF_API_TOKEN
         ),
         subscriptions: Boolean(env.DB && env.PAYSTACK_SECRET_KEY),
-        community: Boolean(env.DB && env.GOOGLE_CLIENT_ID),
+        community: Boolean(env.DB),
+        // true = community also demands a Google-verified login (no phone-key fallback)
+        communityGoogleOnly: Boolean(env.COMMUNITY_REQUIRE_GOOGLE),
         // Ad-free tokens only need the D1 binding + an admin password.
         tokens: Boolean(env.DB && (env.ADMIN_TOKEN || env.STATS_TOKEN)),
       });
@@ -1031,23 +1033,66 @@ async function ratings(request, env, url) {
 
 // ---- movie community ---------------------------------------------------------
 
+// Who is calling the community? Two ways in:
+//  1. A Google ID token (Authorization: Bearer ...) that Google confirms.
+//     This is the strongest proof, needs GOOGLE_CLIENT_ID on the Worker and
+//     the Web client ID in the app build (see COMMUNITY_SETUP.md).
+//  2. A phone key: the app makes a random secret once and sends it with the
+//     Gmail it signed in with. The first phone to use a Gmail locks it; later
+//     requests for that Gmail must carry the same secret, so nobody can post
+//     as someone else afterwards. Works with no Google setup at all.
+//     Switched off by setting COMMUNITY_REQUIRE_GOOGLE.
+// Returns { user } or { error }.
 async function verifyCommunityUser(request, env) {
   const header = request.headers.get("authorization") || "";
   const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
-  if (!token || !env.GOOGLE_CLIENT_ID) return null;
-  try {
-    const r = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(token)}`);
-    if (!r.ok) return null;
-    const claims = await r.json();
-    if (claims.aud !== env.GOOGLE_CLIENT_ID || claims.email_verified !== "true") return null;
-    const email = cleanGmail(claims.email);
-    if (!email) return null;
-    return {
+  if (token && env.GOOGLE_CLIENT_ID) {
+    try {
+      const r = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(token)}`);
+      if (r.ok) {
+        const claims = await r.json();
+        const email = cleanGmail(claims.email);
+        if (claims.aud === env.GOOGLE_CLIENT_ID && claims.email_verified === "true" && email) {
+          // A Google-verified owner always wins: forget any phone key.
+          await env.DB.prepare("DELETE FROM community_keys WHERE email = ?").bind(email).run();
+          return {
+            user: {
+              email,
+              name: String(claims.name || email.split("@")[0]).slice(0, 80),
+              photoUrl: String(claims.picture || "").slice(0, 500),
+            },
+          };
+        }
+      }
+    } catch (_) {}
+  }
+  if (env.COMMUNITY_REQUIRE_GOOGLE) return { error: "google_verification_required" };
+
+  const email = cleanGmail(request.headers.get("x-community-email"));
+  const key = String(request.headers.get("x-community-key") || "");
+  if (!email || !/^[a-f0-9]{32,128}$/.test(key)) return { error: "sign_in_required" };
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode("community-key:" + key));
+  const hash = [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  const row = await env.DB.prepare("SELECT key_hash FROM community_keys WHERE email = ?").bind(email).first();
+  if (!row) {
+    await env.DB.prepare("INSERT OR IGNORE INTO community_keys (email, key_hash, created_at) VALUES (?, ?, ?)")
+      .bind(email, hash, Math.floor(Date.now() / 1000)).run();
+    const again = await env.DB.prepare("SELECT key_hash FROM community_keys WHERE email = ?").bind(email).first();
+    if (!again || again.key_hash !== hash) return { error: "community_key_mismatch" };
+  } else if (row.key_hash !== hash) {
+    return { error: "community_key_mismatch" };
+  }
+  const dec = (v, max) => {
+    try { return decodeURIComponent(String(v || "")).slice(0, max); } catch (_) { return ""; }
+  };
+  const photo = dec(request.headers.get("x-community-photo"), 500);
+  return {
+    user: {
       email,
-      name: String(claims.name || email.split("@")[0]).slice(0, 80),
-      photoUrl: String(claims.picture || "").slice(0, 500),
-    };
-  } catch (_) { return null; }
+      name: dec(request.headers.get("x-community-name"), 80).trim() || email.split("@")[0],
+      photoUrl: /^https:\/\//.test(photo) ? photo : "",
+    },
+  };
 }
 
 let communityMigrated = false;
@@ -1060,6 +1105,7 @@ async function ensureCommunitySchema(env) {
     env.DB.prepare("CREATE TABLE IF NOT EXISTS community_likes (post_id TEXT NOT NULL, email TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(post_id, email))"),
     env.DB.prepare("CREATE TABLE IF NOT EXISTS community_comments (id TEXT PRIMARY KEY, post_id TEXT NOT NULL, email TEXT NOT NULL, text TEXT NOT NULL, created_at INTEGER NOT NULL)"),
     env.DB.prepare("CREATE INDEX IF NOT EXISTS community_comments_post ON community_comments(post_id, created_at ASC)"),
+    env.DB.prepare("CREATE TABLE IF NOT EXISTS community_keys (email TEXT PRIMARY KEY, key_hash TEXT NOT NULL, created_at INTEGER NOT NULL)"),
   ]);
   if (communityMigrated) return;
   // Columns added later: tweet / recommendation, and which title it is about.
@@ -1114,12 +1160,25 @@ function communityPostOut(r, me) {
 async function community(request, env, url) {
   if (!env.DB) return json({ error: "community database is not configured" }, 503);
   if (request.method !== "GET" && request.method !== "POST") return json({ error: "method not allowed" }, 405);
-  const user = await verifyCommunityUser(request, env);
-  if (!user) return json({ error: "google_verification_required" }, 401);
   const path = url.pathname;
   const get = request.method === "GET";
   try {
     await ensureCommunitySchema(env);
+
+    // Admin: let someone who lost their phone / reinstalled the app back in.
+    //   /community/admin/reset?token=<ADMIN_TOKEN>&email=<gmail>
+    if (path === "/community/admin/reset") {
+      const secret = env.ADMIN_TOKEN || env.STATS_TOKEN;
+      if (!secret || url.searchParams.get("token") !== secret) return json({ error: "forbidden" }, 403);
+      const target = cleanGmail(url.searchParams.get("email"));
+      if (!target) return json({ error: "valid_gmail_required" }, 400);
+      await env.DB.prepare("DELETE FROM community_keys WHERE email = ?").bind(target).run();
+      return json({ ok: true, reset: target });
+    }
+
+    const auth = await verifyCommunityUser(request, env);
+    if (!auth.user) return json({ error: auth.error || "sign_in_required" }, 401);
+    const user = auth.user;
     const now = Math.floor(Date.now() / 1000);
     await env.DB.prepare("INSERT INTO community_profiles (email,name,photo_url,bio,created_at,updated_at) VALUES (?,?,?,'',?,?) ON CONFLICT(email) DO UPDATE SET name=excluded.name, photo_url=excluded.photo_url, updated_at=excluded.updated_at")
       .bind(user.email, user.name, user.photoUrl, now, now).run();
