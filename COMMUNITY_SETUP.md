@@ -21,7 +21,7 @@ The Worker creates the community tables automatically when the first community r
 
 ## 2. Verify setup
 
-Open `https://deeprowss-feed.deeprows.workers.dev/health`. The response should include `"community":true`.
+Open `https://streambox-feed.deeprows.workers.dev/health`. The response should include `"community":true`.
 
 Build and install the app with the Web client ID Dart define, sign in through the Google account picker, open **Community**, publish a test tweet, then check the feed from a second device/account. Try liking it, commenting, and opening the author's profile.
 
