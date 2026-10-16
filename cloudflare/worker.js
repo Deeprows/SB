@@ -1050,6 +1050,8 @@ async function verifyCommunityUser(request, env) {
   } catch (_) { return null; }
 }
 
+let communityMigrated = false;
+
 async function ensureCommunitySchema(env) {
   await env.DB.batch([
     env.DB.prepare("CREATE TABLE IF NOT EXISTS community_profiles (email TEXT PRIMARY KEY, name TEXT NOT NULL, photo_url TEXT, bio TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)"),
@@ -1059,10 +1061,54 @@ async function ensureCommunitySchema(env) {
     env.DB.prepare("CREATE TABLE IF NOT EXISTS community_comments (id TEXT PRIMARY KEY, post_id TEXT NOT NULL, email TEXT NOT NULL, text TEXT NOT NULL, created_at INTEGER NOT NULL)"),
     env.DB.prepare("CREATE INDEX IF NOT EXISTS community_comments_post ON community_comments(post_id, created_at ASC)"),
   ]);
+  if (communityMigrated) return;
+  // Columns added later: tweet / recommendation, and which title it is about.
+  // Old databases get them once; "duplicate column" errors are expected.
+  for (const col of [
+    "kind TEXT NOT NULL DEFAULT 'tweet'",
+    "movie_id INTEGER",
+    "movie_type TEXT",
+  ]) {
+    try {
+      await env.DB.prepare("ALTER TABLE community_posts ADD COLUMN " + col).run();
+    } catch (_) {}
+  }
+  communityMigrated = true;
 }
 
 function communityId() {
   return crypto.randomUUID();
+}
+
+// One post row as the app wants it. ?1 = the person looking (for likedByMe).
+const COMMUNITY_POST_SELECT =
+  "SELECT p.id, p.email, p.text, p.kind, p.movie_title AS movieTitle, p.movie_image AS movieImage, " +
+  "p.movie_id AS movieId, p.movie_type AS movieType, p.rating, p.created_at AS createdAt, " +
+  "pr.name, pr.photo_url AS photoUrl, " +
+  "(SELECT COUNT(*) FROM community_likes l WHERE l.post_id = p.id) AS likeCount, " +
+  "(SELECT COUNT(*) FROM community_comments c WHERE c.post_id = p.id) AS commentCount, " +
+  "EXISTS(SELECT 1 FROM community_likes l2 WHERE l2.post_id = p.id AND l2.email = ?1) AS likedByMe " +
+  "FROM community_posts p LEFT JOIN community_profiles pr ON pr.email = p.email ";
+
+function communityPostOut(r, me) {
+  return {
+    id: r.id,
+    email: r.email,
+    name: r.name || String(r.email).split("@")[0],
+    photoUrl: r.photoUrl || "",
+    kind: r.kind === "recommendation" ? "recommendation" : "tweet",
+    text: r.text,
+    movieTitle: r.movieTitle || "",
+    movieImage: r.movieImage || "",
+    movieId: r.movieId || null,
+    movieType: r.movieType === "tv" ? "tv" : "movie",
+    rating: r.rating,
+    createdAt: r.createdAt,
+    likeCount: r.likeCount || 0,
+    commentCount: r.commentCount || 0,
+    likedByMe: Boolean(r.likedByMe),
+    mine: r.email === me,
+  };
 }
 
 async function community(request, env, url) {
@@ -1070,64 +1116,154 @@ async function community(request, env, url) {
   if (request.method !== "GET" && request.method !== "POST") return json({ error: "method not allowed" }, 405);
   const user = await verifyCommunityUser(request, env);
   if (!user) return json({ error: "google_verification_required" }, 401);
+  const path = url.pathname;
+  const get = request.method === "GET";
   try {
     await ensureCommunitySchema(env);
     const now = Math.floor(Date.now() / 1000);
     await env.DB.prepare("INSERT INTO community_profiles (email,name,photo_url,bio,created_at,updated_at) VALUES (?,?,?,'',?,?) ON CONFLICT(email) DO UPDATE SET name=excluded.name, photo_url=excluded.photo_url, updated_at=excluded.updated_at")
       .bind(user.email, user.name, user.photoUrl, now, now).run();
 
-    if (url.pathname === "/community/posts" && request.method === "GET") {
-      const rows = await env.DB.prepare(`SELECT p.id,p.email,p.text,p.movie_title AS movieTitle,p.movie_image AS movieImage,p.rating,p.created_at AS createdAt, pr.name,pr.photo_url AS photoUrl, (SELECT COUNT(*) FROM community_likes l WHERE l.post_id=p.id) AS likeCount, (SELECT COUNT(*) FROM community_comments c WHERE c.post_id=p.id) AS commentCount, EXISTS(SELECT 1 FROM community_likes l WHERE l.post_id=p.id AND l.email=?) AS likedByMe FROM community_posts p LEFT JOIN community_profiles pr ON pr.email=p.email ORDER BY p.created_at DESC LIMIT 100`).bind(user.email).all();
-      return json({ ok: true, posts: rows.results || [] });
+    // GET /community/posts?kind=tweet|recommendation
+    if (path === "/community/posts" && get) {
+      const kind = url.searchParams.get("kind");
+      const filter = kind === "tweet" || kind === "recommendation" ? "WHERE p.kind = ?2 " : "";
+      const stmt = env.DB.prepare(COMMUNITY_POST_SELECT + filter + "ORDER BY p.created_at DESC, p.rowid DESC LIMIT 100");
+      const rows = await (filter ? stmt.bind(user.email, kind) : stmt.bind(user.email)).all();
+      return json({ ok: true, posts: (rows.results || []).map((r) => communityPostOut(r, user.email)) });
     }
-    if (url.pathname === "/community/posts" && request.method === "POST") {
+
+    // POST /community/posts {text, kind, movieTitle, movieImage, movieId, movieType, rating}
+    if (path === "/community/posts" && !get) {
       const body = await request.json().catch(() => ({}));
       const text = String(body.text || "").trim();
+      const kind = body.kind === "recommendation" ? "recommendation" : "tweet";
       const movieTitle = String(body.movieTitle || "").trim().slice(0, 160);
-      const movieImage = String(body.movieImage || "").trim().slice(0, 500);
+      const movieImage = /^https:\/\//.test(String(body.movieImage || "")) ? String(body.movieImage).trim().slice(0, 500) : "";
+      const movieId = Math.round(Number(body.movieId)) > 0 ? Math.round(Number(body.movieId)) : null;
+      const movieType = body.movieType === "tv" ? "tv" : "movie";
       const rating = body.rating == null ? null : Math.round(Number(body.rating));
       if (!text || text.length > 500) return json({ error: "post_text_must_be_1_to_500_characters" }, 400);
       if (rating !== null && (!Number.isFinite(rating) || rating < 0 || rating > 10)) return json({ error: "rating_must_be_0_to_10" }, 400);
+      if (kind === "recommendation" && !movieTitle) return json({ error: "recommendation_needs_a_movie" }, 400);
+      const recent = await env.DB.prepare("SELECT COUNT(*) AS n FROM community_posts WHERE email=? AND created_at>?").bind(user.email, now - 3600).first();
+      if (recent && recent.n >= 20) return json({ error: "slow_down" }, 429);
       const id = communityId();
-      await env.DB.prepare("INSERT INTO community_posts (id,email,text,movie_title,movie_image,rating,created_at) VALUES (?,?,?,?,?,?,?)").bind(id,user.email,text,movieTitle || null,movieImage || null,rating,now).run();
-      return json({ ok: true, id }, 201);
+      await env.DB.prepare("INSERT INTO community_posts (id,email,text,kind,movie_title,movie_image,movie_id,movie_type,rating,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)")
+        .bind(id, user.email, text, kind, movieTitle || null, movieImage || null, movieId, movieId ? movieType : null, rating, now).run();
+      const row = await env.DB.prepare(COMMUNITY_POST_SELECT + "WHERE p.id = ?2").bind(user.email, id).first();
+      return json({ ok: true, id, post: row ? communityPostOut(row, user.email) : null }, 201);
     }
-    if (url.pathname === "/community/like" && request.method === "POST") {
+
+    // POST /community/delete {postId}   (your own post only)
+    if (path === "/community/delete" && !get) {
+      const body = await request.json().catch(() => ({}));
+      const postId = String(body.postId || "").slice(0, 80);
+      const own = await env.DB.prepare("SELECT id FROM community_posts WHERE id=? AND email=?").bind(postId, user.email).first();
+      if (!own) return json({ error: "post_not_found" }, 404);
+      await env.DB.batch([
+        env.DB.prepare("DELETE FROM community_likes WHERE post_id=?").bind(postId),
+        env.DB.prepare("DELETE FROM community_comments WHERE post_id=?").bind(postId),
+        env.DB.prepare("DELETE FROM community_posts WHERE id=?").bind(postId),
+      ]);
+      return json({ ok: true });
+    }
+
+    // POST /community/like {postId}  -> toggles, returns the new count
+    if (path === "/community/like" && !get) {
       const body = await request.json().catch(() => ({}));
       const postId = String(body.postId || "").slice(0, 80);
       if (!postId) return json({ error: "post_id_required" }, 400);
-      const exists = await env.DB.prepare("SELECT post_id FROM community_likes WHERE post_id=? AND email=?").bind(postId,user.email).first();
-      if (exists) await env.DB.prepare("DELETE FROM community_likes WHERE post_id=? AND email=?").bind(postId,user.email).run();
-      else await env.DB.prepare("INSERT OR IGNORE INTO community_likes (post_id,email,created_at) VALUES (?,?,?)").bind(postId,user.email,now).run();
-      return json({ ok: true, liked: !exists });
+      const post = await env.DB.prepare("SELECT id FROM community_posts WHERE id=?").bind(postId).first();
+      if (!post) return json({ error: "post_not_found" }, 404);
+      const exists = await env.DB.prepare("SELECT post_id FROM community_likes WHERE post_id=? AND email=?").bind(postId, user.email).first();
+      if (exists) await env.DB.prepare("DELETE FROM community_likes WHERE post_id=? AND email=?").bind(postId, user.email).run();
+      else await env.DB.prepare("INSERT OR IGNORE INTO community_likes (post_id,email,created_at) VALUES (?,?,?)").bind(postId, user.email, now).run();
+      const n = await env.DB.prepare("SELECT COUNT(*) AS n FROM community_likes WHERE post_id=?").bind(postId).first();
+      return json({ ok: true, liked: !exists, likeCount: (n && n.n) || 0 });
     }
-    if (url.pathname === "/community/comments" && request.method === "GET") {
+
+    // GET /community/comments?postId=
+    if (path === "/community/comments" && get) {
       const postId = String(url.searchParams.get("postId") || "").slice(0, 80);
       if (!postId) return json({ error: "post_id_required" }, 400);
-      const rows = await env.DB.prepare("SELECT c.id,c.post_id AS postId,c.text,c.created_at AS createdAt,p.email,COALESCE(pr.name,p.email) AS name,pr.photo_url AS photoUrl FROM community_comments c JOIN community_posts p ON p.id=c.post_id LEFT JOIN community_profiles pr ON pr.email=c.email WHERE c.post_id=? ORDER BY c.created_at ASC LIMIT 200").bind(postId).all();
-      return json({ ok: true, comments: rows.results || [] });
+      const rows = await env.DB.prepare("SELECT c.id, c.post_id AS postId, c.text, c.created_at AS createdAt, c.email, p.email AS postEmail, COALESCE(pr.name, c.email) AS name, pr.photo_url AS photoUrl FROM community_comments c JOIN community_posts p ON p.id=c.post_id LEFT JOIN community_profiles pr ON pr.email=c.email WHERE c.post_id=? ORDER BY c.created_at ASC, c.rowid ASC LIMIT 200").bind(postId).all();
+      return json({
+        ok: true,
+        comments: (rows.results || []).map((r) => ({
+          id: r.id,
+          postId: r.postId,
+          email: r.email,
+          name: r.name && !String(r.name).includes("@") ? r.name : String(r.email).split("@")[0],
+          photoUrl: r.photoUrl || "",
+          text: r.text,
+          createdAt: r.createdAt,
+          mine: r.email === user.email,
+          canDelete: r.email === user.email || r.postEmail === user.email,
+        })),
+      });
     }
-    if (url.pathname === "/community/comments" && request.method === "POST") {
+
+    // POST /community/comments {postId, text}
+    if (path === "/community/comments" && !get) {
       const body = await request.json().catch(() => ({}));
       const postId = String(body.postId || "").slice(0, 80);
       const text = String(body.text || "").trim();
       if (!postId || !text || text.length > 500) return json({ error: "post_id_and_comment_1_to_500_characters_required" }, 400);
       const post = await env.DB.prepare("SELECT id FROM community_posts WHERE id=?").bind(postId).first();
       if (!post) return json({ error: "post_not_found" }, 404);
-      await env.DB.prepare("INSERT INTO community_comments (id,post_id,email,text,created_at) VALUES (?,?,?,?,?)").bind(communityId(),postId,user.email,text,now).run();
-      return json({ ok: true }, 201);
+      const recent = await env.DB.prepare("SELECT COUNT(*) AS n FROM community_comments WHERE email=? AND created_at>?").bind(user.email, now - 600).first();
+      if (recent && recent.n >= 30) return json({ error: "slow_down" }, 429);
+      await env.DB.prepare("INSERT INTO community_comments (id,post_id,email,text,created_at) VALUES (?,?,?,?,?)").bind(communityId(), postId, user.email, text, now).run();
+      const n = await env.DB.prepare("SELECT COUNT(*) AS n FROM community_comments WHERE post_id=?").bind(postId).first();
+      return json({ ok: true, commentCount: (n && n.n) || 0 }, 201);
     }
-    if (url.pathname === "/community/people" && request.method === "GET") {
+
+    // POST /community/comments/delete {id}  (your comment, or any comment under your post)
+    if (path === "/community/comments/delete" && !get) {
+      const body = await request.json().catch(() => ({}));
+      const id = String(body.id || "").slice(0, 80);
+      const row = await env.DB.prepare("SELECT c.id, c.email, p.email AS postEmail FROM community_comments c JOIN community_posts p ON p.id=c.post_id WHERE c.id=?").bind(id).first();
+      if (!row || (row.email !== user.email && row.postEmail !== user.email)) return json({ error: "comment_not_found" }, 404);
+      await env.DB.prepare("DELETE FROM community_comments WHERE id=?").bind(id).run();
+      return json({ ok: true });
+    }
+
+    // GET /community/people
+    if (path === "/community/people" && get) {
       const rows = await env.DB.prepare("SELECT pr.email,pr.name,pr.photo_url AS photoUrl,COUNT(p.id) AS postCount FROM community_profiles pr LEFT JOIN community_posts p ON p.email=pr.email GROUP BY pr.email ORDER BY postCount DESC, pr.updated_at DESC LIMIT 100").all();
       return json({ ok: true, people: rows.results || [] });
     }
-    if (url.pathname === "/community/profile" && request.method === "GET") {
+
+    // GET /community/profile?email=  -> person, counts, last tweet, last recommendation
+    if (path === "/community/profile" && get) {
       const email = cleanGmail(url.searchParams.get("email"));
       if (!email) return json({ error: "valid_gmail_required" }, 400);
       const profile = await env.DB.prepare("SELECT email,name,photo_url AS photoUrl,bio FROM community_profiles WHERE email=?").bind(email).first();
       if (!profile) return json({ error: "profile_not_found" }, 404);
-      const posts = await env.DB.prepare("SELECT id,text,movie_title AS movieTitle,movie_image AS movieImage,rating,created_at AS createdAt FROM community_posts WHERE email=? ORDER BY created_at DESC LIMIT 30").bind(email).all();
-      return json({ ok: true, profile: { ...profile, postCount: (posts.results || []).length, posts: posts.results || [] } });
+      const posts = await env.DB.prepare(COMMUNITY_POST_SELECT + "WHERE p.email = ?2 ORDER BY p.created_at DESC, p.rowid DESC LIMIT 30").bind(user.email, email).all();
+      const list = (posts.results || []).map((r) => communityPostOut(r, user.email));
+      const one = async (kind) => {
+        const r = await env.DB.prepare(COMMUNITY_POST_SELECT + "WHERE p.email = ?2 AND p.kind = ?3 ORDER BY p.created_at DESC, p.rowid DESC LIMIT 1").bind(user.email, email, kind).first();
+        return r ? communityPostOut(r, user.email) : null;
+      };
+      const cnt = await env.DB.prepare("SELECT COUNT(*) AS n FROM community_posts WHERE email=?").bind(email).first();
+      const likes = await env.DB.prepare("SELECT COUNT(*) AS n FROM community_likes WHERE post_id IN (SELECT id FROM community_posts WHERE email=?)").bind(email).first();
+      return json({
+        ok: true,
+        profile: {
+          email: profile.email,
+          name: profile.name,
+          photoUrl: profile.photoUrl || "",
+          bio: profile.bio || "",
+          mine: email === user.email,
+          postCount: (cnt && cnt.n) || 0,
+          likeCount: (likes && likes.n) || 0,
+          lastTweet: await one("tweet"),
+          lastRecommendation: await one("recommendation"),
+          posts: list,
+        },
+      });
     }
     return json({ error: "not found" }, 404);
   } catch (e) {
