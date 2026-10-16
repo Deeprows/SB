@@ -267,6 +267,22 @@ class AuthService extends ChangeNotifier {
     return SignInResult.ok;
   }
 
+
+  /// Short-lived Google ID token used by the community API. The Worker verifies
+  /// this token with Google before accepting any post, comment, or like.
+  Future<String?> googleIdToken() async {
+    try {
+      var account = _google.currentUser;
+      account ??= await _google.signInSilently();
+      if (account == null) return null;
+      final auth = await account.authentication;
+      final token = auth.idToken;
+      return token != null && token.isNotEmpty ? token : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> _save(AuthUser u) async {
     _user = u;
     try {
