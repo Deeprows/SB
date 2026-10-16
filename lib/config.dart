@@ -62,7 +62,7 @@ class AppConfig {
   ///
   /// Example: `https://feed.deeprowss.com`.
   /// Empty = download from GitHub only.
-  static const feedBase = 'https://deeprowss-feed.deeprows.workers.dev';
+  static const feedBase = 'https://streambox-feed.deeprows.workers.dev';
 
   /// ---- Free vs Premium ---------------------------------------------------
   ///
