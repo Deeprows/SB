@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:ui' show ImageFilter;
 
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/material.dart';
 
 import '../config.dart';
@@ -167,29 +166,13 @@ class _MoviesScreenState extends State<MoviesScreen> {
   }
 
   Future<void> _load({bool remote = false}) async {
-    List<Movie>? list;
-    try {
-      // Never let the home page wait for ever on one slow step.
-      list = await feed
-          .loadMovies(remote: remote)
-          .timeout(Duration(seconds: remote ? 25 : 12));
-    } catch (e) {
-      debugPrint('Home movie list failed: $e');
-    }
+    final list = await feed.loadMovies(remote: remote);
     if (!mounted) return;
-    final got = list;
     setState(() {
-      // Keep what is already on screen if this load failed.
-      if (got != null) _all = got;
-      _loading = false; // always stop the spinner
+      _all = list;
+      _loading = false;
     });
     _fetchHomeRows();
-    // First load failed or came back empty: try again from TMDB / network.
-    if (!remote && (got == null || got.isEmpty)) {
-      Future<void>.delayed(const Duration(seconds: 1), () {
-        if (mounted) _load(remote: true);
-      });
-    }
   }
 
   /// Saved copy first (instant), then TMDB's live popular movies + series.
@@ -836,17 +819,17 @@ class _MoviesScreenState extends State<MoviesScreen> {
       ..sort((a, b) => b.date!.compareTo(a.date!));
 
     add('Continue Watching'.tr, lib.history.map((e) => e.movie));
+    // Latest Trailers sits right under Continue Watching (or at the top when
+    // there is no Continue Watching row yet).
+    if (TmdbService.enabled) {
+      out.add(LatestTrailersRow(
+          key: const ValueKey('latest-trailers'), onOpen: _details));
+    }
     if (_trending.isNotEmpty) {
       add('Trending Now'.tr, _trending);
       add('Top 10 Today'.tr, _trending, numbered: true, max: 10, min: 5);
     } else {
       add('Popular on ${AppConfig.appName}', ranked);
-    }
-    // Latest Trailers sits right under Top 10 Today (or under the Popular
-    // row when there is no Top 10 yet).
-    if (TmdbService.enabled) {
-      out.add(LatestTrailersRow(
-          key: const ValueKey('latest-trailers'), onOpen: _details));
     }
     add('My List'.tr, lib.watchLater);
     add('New on ${AppConfig.appName}', newest);
