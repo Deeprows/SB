@@ -166,51 +166,45 @@ class _MoviesScreenState extends State<MoviesScreen> {
   }
 
   Future<void> _load({bool remote = false}) async {
+    List<Movie>? list;
     try {
-      // Feed loading must never keep the first screen on a spinner forever.
-      final list = await feed
+      // Never let the home spinner run for ever: a slow or failing load is
+      // given up on and the rows that are ready (TMDB lists) are shown.
+      list = await feed
           .loadMovies(remote: remote)
-          .timeout(const Duration(seconds: 25));
-      if (!mounted) return;
-      setState(() {
-        _all = list;
-        _loading = false;
-      });
-      unawaited(_fetchHomeRows());
-    } catch (e, st) {
-      debugPrint('Movie feed failed (remote=$remote): $e');
-      debugPrintStack(stackTrace: st);
-      if (!mounted) return;
-      // Preserve any already displayed catalogue if a background refresh fails.
-      setState(() => _loading = false);
+          .timeout(Duration(seconds: remote ? 60 : 20));
+    } catch (e) {
+      debugPrint('Home list could not be loaded: $e');
     }
+    if (!mounted) return;
+    setState(() {
+      if (list != null) _all = list;
+      _loading = false;
+    });
+    _fetchHomeRows();
   }
 
   /// Saved copy first (instant), then TMDB's live popular movies + series.
   Future<void> _loadPopular({bool force = false}) async {
     if (!TmdbService.enabled) return;
-    // Show cached lists immediately; a failure in one endpoint must not stop
-    // the other list or any of the locally backed homepage rows.
     try {
-      final m = await tmdb.popular(tv: false, fetch: false)
-          .timeout(const Duration(seconds: 8));
-      if (mounted && m.isNotEmpty) setState(() => _popMovies = m);
-    } catch (e) { debugPrint('Cached popular movies unavailable: $e'); }
-    try {
-      final t = await tmdb.popular(tv: true, fetch: false)
-          .timeout(const Duration(seconds: 8));
-      if (mounted && t.isNotEmpty) setState(() => _popTv = t);
-    } catch (e) { debugPrint('Cached popular TV unavailable: $e'); }
-    try {
-      final fm = await tmdb.popular(tv: false, force: force)
-          .timeout(const Duration(seconds: 14));
-      if (mounted && fm.isNotEmpty) setState(() => _popMovies = fm);
-    } catch (e) { debugPrint('Popular movies refresh failed: $e'); }
-    try {
-      final ft = await tmdb.popular(tv: true, force: force)
-          .timeout(const Duration(seconds: 14));
-      if (mounted && ft.isNotEmpty) setState(() => _popTv = ft);
-    } catch (e) { debugPrint('Popular TV refresh failed: $e'); }
+      final m = await tmdb.popular(tv: false, fetch: false);
+      final t = await tmdb.popular(tv: true, fetch: false);
+      if (mounted && (m.isNotEmpty || t.isNotEmpty)) {
+        setState(() {
+          if (m.isNotEmpty) _popMovies = m;
+          if (t.isNotEmpty) _popTv = t;
+        });
+      }
+      final fm = await tmdb.popular(tv: false, force: force);
+      final ft = await tmdb.popular(tv: true, force: force);
+      if (mounted) {
+        setState(() {
+          if (fm.isNotEmpty) _popMovies = fm;
+          if (ft.isNotEmpty) _popTv = ft;
+        });
+      }
+    } catch (_) {}
   }
 
   /// Fills the home category rows (the first six categories) with TMDB's
@@ -223,15 +217,9 @@ class _MoviesScreenState extends State<MoviesScreen> {
     try {
       for (final g in _genres.take(6)) {
         if (_discover.containsKey(g)) continue;
-        try {
-          final res = await tmdb.discover(g)
-              .timeout(const Duration(seconds: 12));
-          if (!mounted) return;
-          if (res.isNotEmpty) setState(() => _discover[g] = res);
-        } catch (e) {
-          // Keep the local genre row visible when a TMDB category fails.
-          debugPrint('Category "$g" failed to load: $e');
-        }
+        final res = await tmdb.discover(g);
+        if (!mounted) return;
+        if (res.isNotEmpty) setState(() => _discover[g] = res);
       }
     } finally {
       _homeRowsBusy = false;
@@ -242,15 +230,11 @@ class _MoviesScreenState extends State<MoviesScreen> {
   Future<void> _loadTrending({bool force = false}) async {
     if (!TmdbService.enabled || !AppConfig.tmdbTrending) return;
     try {
-      final cached = await tmdb.trending(fetch: false)
-          .timeout(const Duration(seconds: 8));
+      final cached = await tmdb.trending(fetch: false);
       if (mounted && cached.isNotEmpty) setState(() => _trending = cached);
-    } catch (e) { debugPrint('Cached trending list unavailable: $e'); }
-    try {
-      final fresh = await tmdb.trending(force: force)
-          .timeout(const Duration(seconds: 14));
+      final fresh = await tmdb.trending(force: force);
       if (mounted && fresh.isNotEmpty) setState(() => _trending = fresh);
-    } catch (e) { debugPrint('Trending refresh failed: $e'); }
+    } catch (_) {}
   }
 
   /// Searches the whole TMDB catalogue shortly after typing stops.
@@ -844,19 +828,18 @@ class _MoviesScreenState extends State<MoviesScreen> {
       ..sort((a, b) => b.date!.compareTo(a.date!));
 
     add('Continue Watching'.tr, lib.history.map((e) => e.movie));
-    // Latest Trailers sits right under Continue Watching (or at the top when
-    // there is no Continue Watching row yet).
+    if (_trending.isNotEmpty) {
+      add('Trending Now'.tr, _trending);
+      add('Top 10 Today'.tr, _trending, numbered: true, max: 10, min: 5);
+    } else {
+      add('Popular on ${AppConfig.appName}', ranked);
+    }
+    // Latest Trailers sits right under Top 10 Today (or under the Popular
+    // row when there is no Top 10 yet).
     if (TmdbService.enabled) {
       out.add(LatestTrailersRow(
           key: const ValueKey('latest-trailers'), onOpen: _details));
     }
-    // Always provide these rows from the local catalogue while TMDB is
-    // loading/offline. Live trending replaces the fallback when available.
-    final trendingSource = _trending.isNotEmpty ? _trending : ranked;
-    add('Trending Now'.tr, trendingSource);
-    add('Top 10 Today'.tr, trendingSource,
-        numbered: true, max: 10, min: 5);
-    if (_trending.isEmpty) add('Popular on ${AppConfig.appName}', ranked);
     add('My List'.tr, lib.watchLater);
     add('New on ${AppConfig.appName}', newest);
     // Popular and category rows come from TMDB's live lists; your own list
