@@ -88,7 +88,13 @@ class _Probe {
   final String? fileName;
   final int? total;
   final String type;
-  const _Probe({this.error, this.fileName, this.total, this.type = ''});
+  final String referer; // the Referer that the server accepted
+  const _Probe(
+      {this.error,
+      this.fileName,
+      this.total,
+      this.type = '',
+      this.referer = ''});
 }
 
 /// A running in-app (plain Dart) download. See [DownloadManager._run].
@@ -383,6 +389,7 @@ class DownloadManager extends ChangeNotifier {
     var fileName =
         sanitizeFileName(name ?? probe.fileName ?? fileNameFromUrl(url));
     if (!fileName.contains('.')) fileName += _extForType(probe.type);
+    referer = probe.referer; // the one the server accepted
     final headers = <String, String>{
       'User-Agent': AppConfig.userAgent,
       if (referer.isNotEmpty) 'Referer': referer,
@@ -752,23 +759,40 @@ class DownloadManager extends ChangeNotifier {
   /// size, and catches links that return a web page instead of a file.
   Future<_Probe> _probe(String url, String referer, String cookie) async {
     final client = http.Client();
-    Future<http.StreamedResponse> send(bool range) {
+    Future<http.StreamedResponse> send(bool range, String ref) {
       final req = http.Request('GET', Uri.parse(url))
         ..followRedirects = true
         ..maxRedirects = 8;
       req.headers['User-Agent'] = AppConfig.userAgent;
       req.headers['Accept'] = '*/*';
-      if (referer.isNotEmpty) req.headers['Referer'] = referer;
+      if (ref.isNotEmpty) req.headers['Referer'] = ref;
       if (cookie.isNotEmpty) req.headers['Cookie'] = cookie;
       if (range) req.headers['Range'] = 'bytes=0-0';
       return client.send(req).timeout(const Duration(seconds: 12));
     }
 
+    // Some hosts answer 403 to one Referer and accept another (or none).
+    final uri = Uri.tryParse(url);
+    final refs = <String>[
+      referer,
+      if (uri != null && uri.hasAuthority) '${uri.scheme}://${uri.host}/',
+      '',
+    ];
+    final tried = <String>{};
+
     try {
-      var res = await send(true);
-      if (res.statusCode >= 400) res = await send(false);
-      if (res.statusCode >= 400) {
-        return _Probe(error: 'The server replied ${res.statusCode}.');
+      http.StreamedResponse? res;
+      var usedRef = referer;
+      for (final ref in refs) {
+        if (!tried.add(ref)) continue;
+        var r = await send(true, ref);
+        if (r.statusCode >= 400) r = await send(false, ref);
+        res = r;
+        usedRef = ref;
+        if (r.statusCode < 400) break;
+      }
+      if (res == null || res.statusCode >= 400) {
+        return _Probe(error: 'The server replied ${res?.statusCode}.');
       }
 
       final type = (res.headers['content-type'] ?? '').toLowerCase();
@@ -789,7 +813,8 @@ class DownloadManager extends ChangeNotifier {
           res.contentLength! > 0) {
         total = res.contentLength;
       }
-      return _Probe(fileName: disp, total: total, type: type);
+      return _Probe(
+          fileName: disp, total: total, type: type, referer: usedRef);
     } on TimeoutException {
       return const _Probe(error: 'The server took too long to respond.');
     } catch (_) {
