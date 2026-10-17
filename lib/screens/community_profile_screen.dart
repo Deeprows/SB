@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../services/community_service.dart';
+import 'watch_together_screen.dart';
 import '../theme/app_theme.dart';
 import '../utils/l10n.dart';
 import '../widgets/community_widgets.dart';
@@ -188,6 +189,25 @@ class _CommunityProfileScreenState extends State<CommunityProfileScreen> {
         children: [
           _header(p.name, p.photoUrl, p.bio,
               posts: p.postCount, likes: p.likeCount),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+            child: SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                  builder: (_) => const WatchTogetherScreen(),
+                )),
+                icon: const Icon(Icons.groups_rounded),
+                label: const Text('Watch Together'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: Ui.red,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                ),
+              ),
+            ),
+          ),
           _section('Last movie tweet', Icons.chat_bubble_rounded),
           _slot(p.lastTweet, 'No movie tweets yet.'),
           _section('Last recommendation', Icons.thumb_up_alt_rounded),
