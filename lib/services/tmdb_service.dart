@@ -52,18 +52,25 @@ class TmdbService {
   };
 
   Future<dynamic> _get(String path, [Map<String, String> query = const {}]) async {
-    try {
-      final uri = Uri.https('api.themoviedb.org', '/3$path', {
-        'api_key': AppConfig.tmdbApiKey,
-        'language': 'en-US',
-        ...query,
-      });
-      final res = await http.get(uri).timeout(const Duration(seconds: 10));
-      if (res.statusCode != 200) return null;
-      return jsonDecode(utf8.decode(res.bodyBytes));
-    } catch (_) {
-      return null;
+    final uri = Uri.https('api.themoviedb.org', '/3$path', {
+      'api_key': AppConfig.tmdbApiKey,
+      'language': 'en-US',
+      ...query,
+    });
+    // Slow connections (a few KB/s) need far more than 10 seconds for a
+    // trending list, so wait longer and try once more before giving up.
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        final res = await http.get(uri).timeout(const Duration(seconds: 30));
+        if (res.statusCode == 200) {
+          return jsonDecode(utf8.decode(res.bodyBytes));
+        }
+        if (res.statusCode >= 400 && res.statusCode < 500) return null;
+      } catch (_) {
+        // timeout / no network: try again below
+      }
     }
+    return null;
   }
 
   /// One TMDB result (list item or details) -> [Movie]. [type] is used when
@@ -199,15 +206,13 @@ class TmdbService {
           age >= 0 &&
           age < const Duration(minutes: 15).inMilliseconds;
       if (force || !fresh) {
-        final pages = await Future.wait([
-          _get('/trending/all/day', {'page': '1'}),
-          _get('/trending/all/day', {'page': '2'}),
-        ]);
+        // One page at a time: on a slow connection the first page is saved
+        // (and shown) as soon as it arrives instead of waiting for both.
         final all = <dynamic>[];
-        for (final p in pages) {
+        for (final page in const ['1', '2']) {
+          final p = await _get('/trending/all/day', {'page': page});
           if (p is Map && p['results'] is List) all.addAll(p['results'] as List);
-        }
-        if (all.isNotEmpty) {
+          if (all.isEmpty) break; // no connection to TMDB: stop early
           await prefs.setString(_trendingKey, jsonEncode(all));
           await prefs.setInt(
               _trendingAtKey, DateTime.now().millisecondsSinceEpoch);
