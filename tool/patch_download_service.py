@@ -330,6 +330,15 @@ if "setupDownloads" not in src:
                         }.start()
                     }
                 }
+                "cookies" -> {
+                    // Full cookie string the WebView holds for this address,
+                    // HttpOnly cookies included (document.cookie hides those).
+                    val u = call.argument<String>("url")
+                    val c = try {
+                        if (u == null) null else android.webkit.CookieManager.getInstance().getCookie(u)
+                    } catch (e: Exception) { null }
+                    result.success(c ?: "")
+                }
                 "result" -> {
                     DownloadService.showResult(
                         this,
