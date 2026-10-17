@@ -65,15 +65,20 @@ class TmdbService {
         final res = await http
             .get(Uri.parse('$base/tmdb/3$path').replace(queryParameters: params))
             .timeout(const Duration(seconds: 15));
-        if (res.headers['x-tmdb-proxy'] == '1') {
-          // It really came from TMDB: trust its answer.
-          if (res.statusCode == 200) {
-            return jsonDecode(utf8.decode(res.bodyBytes));
+        if (res.statusCode == 200) {
+          final data = jsonDecode(utf8.decode(res.bodyBytes));
+          // A real TMDB answer is a JSON object ({results: [...]} or a
+          // title's details). Anything else is not from the proxy.
+          if (data is Map && !data.containsKey('error')) return data;
+        }
+        if (res.statusCode == 404 || res.statusCode == 403) {
+          // Worker without the proxy route (or TMDB has no such title):
+          // ask TMDB directly below, and leave the Worker alone for a while
+          // only when the route itself is missing.
+          final body = res.body;
+          if (body.contains('"error"')) {
+            _workerSkipUntil = DateTime.now().add(const Duration(minutes: 10));
           }
-          if (res.statusCode >= 400 && res.statusCode < 500) return null;
-        } else {
-          // Old Worker without the proxy route.
-          _workerSkipUntil = DateTime.now().add(const Duration(minutes: 10));
         }
       } catch (_) {
         _workerSkipUntil = DateTime.now().add(const Duration(minutes: 2));
