@@ -528,6 +528,28 @@ class CommunityService extends ChangeNotifier {
     return Map<String, dynamic>.from(d['room'] as Map);
   }
 
+  /// Rooms you host or have joined in the last 24 hours.
+  Future<List<Map<String, dynamic>>> myWatchRooms() async {
+    final d = await _request('/community/watch/mine');
+    final raw = d is Map ? d['rooms'] : null;
+    if (raw is! List) return [];
+    return raw.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+  }
+
+  /// Chat message, emoji reaction, or (host only) the shared "start".
+  Future<void> watchEvent(String roomId, String kind, [String text = '']) async {
+    await _request('/community/watch/event',
+        body: {'roomId': roomId, 'kind': kind, 'text': text});
+  }
+
+  /// New room events after [since] (0 = the latest chat messages).
+  Future<Map<String, dynamic>> watchEvents(String roomId, int since) async {
+    final d = await _request(
+        '/community/watch/events?roomId=${Uri.encodeQueryComponent(roomId)}&since=$since');
+    if (d is! Map) throw const CommunityException('watch_room_failed');
+    return Map<String, dynamic>.from(d);
+  }
+
   Future<List<CommunityPerson>> people() async {
     final d = await _request('/community/people');
     final out = <CommunityPerson>[];
