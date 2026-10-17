@@ -819,17 +819,17 @@ class _MoviesScreenState extends State<MoviesScreen> {
       ..sort((a, b) => b.date!.compareTo(a.date!));
 
     add('Continue Watching'.tr, lib.history.map((e) => e.movie));
-    // Latest Trailers sits right under Continue Watching (or at the top when
-    // there is no Continue Watching row yet).
-    if (TmdbService.enabled) {
-      out.add(LatestTrailersRow(
-          key: const ValueKey('latest-trailers'), onOpen: _details));
-    }
     if (_trending.isNotEmpty) {
       add('Trending Now'.tr, _trending);
       add('Top 10 Today'.tr, _trending, numbered: true, max: 10, min: 5);
     } else {
       add('Popular on ${AppConfig.appName}', ranked);
+    }
+    // Latest Trailers sits right under Top 10 Today (or under the Popular
+    // row when there is no Top 10 yet).
+    if (TmdbService.enabled) {
+      out.add(LatestTrailersRow(
+          key: const ValueKey('latest-trailers'), onOpen: _details));
     }
     add('My List'.tr, lib.watchLater);
     add('New on ${AppConfig.appName}', newest);
