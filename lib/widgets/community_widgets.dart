@@ -293,35 +293,74 @@ class PostCard extends StatelessWidget {
               if (showAuthor)
                 Row(
                   children: [
-                    GestureDetector(
-                      onTap: () => openCommunityProfile(context, post.email,
-                          name: post.name, photoUrl: post.photoUrl),
-                      child: CommunityAvatar(
-                          url: post.photoUrl, name: post.name, radius: 19),
-                    ),
-                    const SizedBox(width: 10),
+                    // Make the complete author area (avatar, name and timestamp)
+                    // one clear tap target. The post badge remains independent.
                     Expanded(
-                      child: GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onTap: () => openCommunityProfile(context, post.email,
-                            name: post.name, photoUrl: post.photoUrl),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(post.mine ? '${post.name} · ${'You'.tr}' : post.name,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                    fontWeight: FontWeight.w900,
-                                    fontSize: 14.5)),
-                            const SizedBox(height: 2),
-                            Text(timeAgo(post.createdAt),
-                                style:
-                                    TextStyle(color: Ui.muted, fontSize: 11.5)),
-                          ],
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(12),
+                          onTap: () {
+                            final email = post.email.trim();
+                            if (email.isEmpty) {
+                              communityToast(
+                                context,
+                                'This user profile is not available yet.',
+                              );
+                              return;
+                            }
+                            openCommunityProfile(
+                              context,
+                              email,
+                              name: post.name,
+                              photoUrl: post.photoUrl,
+                            );
+                          },
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                                vertical: 4, horizontal: 2),
+                            child: Row(
+                              children: [
+                                CommunityAvatar(
+                                  url: post.photoUrl,
+                                  name: post.name,
+                                  radius: 19,
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        post.mine
+                                            ? '${post.name} · ${'You'.tr}'
+                                            : post.name,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w900,
+                                          fontSize: 14.5,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        timeAgo(post.createdAt),
+                                        style: TextStyle(
+                                          color: Ui.muted,
+                                          fontSize: 11.5,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
                         ),
                       ),
                     ),
+                    const SizedBox(width: 8),
                     _KindBadge(recommendation: post.recommendation),
                     if (post.mine)
                       PopupMenuButton<String>(
