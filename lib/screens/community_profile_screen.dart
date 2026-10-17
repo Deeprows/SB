@@ -195,8 +195,7 @@ class _CommunityProfileScreenState extends State<CommunityProfileScreen> {
               width: double.infinity,
               child: FilledButton.icon(
                 onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
-                  builder: (_) => WatchTogetherScreen(
-                      inviteEmail: p.mine ? null : p.email),
+                  builder: (_) => const WatchTogetherScreen(),
                 )),
                 icon: const Icon(Icons.groups_rounded),
                 label: const Text('Watch Together'),
