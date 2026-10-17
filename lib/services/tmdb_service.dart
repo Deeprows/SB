@@ -54,8 +54,18 @@ class TmdbService {
   // After a failed try through the Worker, go straight to TMDB for a while.
   DateTime _workerSkipUntil = DateTime.fromMillisecondsSinceEpoch(0);
 
+  /// What went wrong the last time TMDB could not be reached (shown on the
+  /// home screen when the live lists are missing).
+  static String lastNote = '';
+
+  static const _headers = {
+    'User-Agent': AppConfig.userAgent,
+    'Accept': 'application/json',
+  };
+
   Future<dynamic> _get(String path, [Map<String, String> query = const {}]) async {
     final params = <String, String>{'language': 'en-US', ...query};
+    final notes = <String>[];
 
     // 1) Through your Cloudflare Worker (cached there, and reachable even
     //    when a network blocks or throttles api.themoviedb.org).
@@ -63,24 +73,28 @@ class TmdbService {
     if (base.isNotEmpty && DateTime.now().isAfter(_workerSkipUntil)) {
       try {
         final res = await http
-            .get(Uri.parse('$base/tmdb/3$path').replace(queryParameters: params))
+            .get(Uri.parse('$base/tmdb/3$path').replace(queryParameters: params),
+                headers: _headers)
             .timeout(const Duration(seconds: 15));
         if (res.statusCode == 200) {
           final data = jsonDecode(utf8.decode(res.bodyBytes));
           // A real TMDB answer is a JSON object ({results: [...]} or a
           // title's details). Anything else is not from the proxy.
-          if (data is Map && !data.containsKey('error')) return data;
-        }
-        if (res.statusCode == 404 || res.statusCode == 403) {
-          // Worker without the proxy route (or TMDB has no such title):
-          // ask TMDB directly below, and leave the Worker alone for a while
-          // only when the route itself is missing.
-          final body = res.body;
-          if (body.contains('"error"')) {
+          if (data is Map && !data.containsKey('error')) {
+            lastNote = '';
+            return data;
+          }
+          notes.add('Worker sent an unexpected answer');
+        } else {
+          notes.add('Worker HTTP ${res.statusCode}');
+          if ((res.statusCode == 404 || res.statusCode == 403) &&
+              res.body.contains('"error"')) {
+            // The Worker has no proxy route: stop asking it for a while.
             _workerSkipUntil = DateTime.now().add(const Duration(minutes: 10));
           }
         }
-      } catch (_) {
+      } catch (e) {
+        notes.add('Worker: ${e.toString().split('\n').first}');
         _workerSkipUntil = DateTime.now().add(const Duration(minutes: 2));
       }
     }
@@ -93,15 +107,19 @@ class TmdbService {
     });
     for (var attempt = 0; attempt < 2; attempt++) {
       try {
-        final res = await http.get(uri).timeout(const Duration(seconds: 30));
+        final res =
+            await http.get(uri, headers: _headers).timeout(const Duration(seconds: 30));
         if (res.statusCode == 200) {
+          lastNote = '';
           return jsonDecode(utf8.decode(res.bodyBytes));
         }
-        if (res.statusCode >= 400 && res.statusCode < 500) return null;
-      } catch (_) {
-        // timeout / no network: try again below
+        notes.add('TMDB HTTP ${res.statusCode}');
+        if (res.statusCode >= 400 && res.statusCode < 500) break;
+      } catch (e) {
+        notes.add('TMDB: ${e.toString().split('\n').first}');
       }
     }
+    lastNote = notes.toSet().join(' · ');
     return null;
   }
 
