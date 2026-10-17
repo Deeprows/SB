@@ -53,38 +53,45 @@ class _WatchTogetherScreenState extends State<WatchTogetherScreen> {
       _loading = true;
       _error = null;
     });
-    try {
-      final values = await Future.wait<dynamic>([
-        _community.people(),
-        _feed.loadMovies(),
-        _community.watchInvitations(),
-        _community.myWatchRooms(),
-      ]);
-      if (!mounted) return;
-      setState(() {
-        _people = (values[0] as List<CommunityPerson>)
-            .where((p) => p.email.toLowerCase() != _me)
-            .toList();
-        _movies = values[1] as List<Movie>;
-        _invitations = values[2] as List<Map<String, dynamic>>;
-        _rooms = values[3] as List<Map<String, dynamic>>;
-        _loading = false;
-      });
-    } on CommunityException catch (e) {
-      if (mounted) {
-        setState(() {
-          _loading = false;
-          _error = e.message;
-        });
+    // Each list loads on its own: one failing request (for example a Worker
+    // that has not been updated yet) must not empty the movies and people.
+    final notes = <String>[];
+
+    Future<T> safe<T>(Future<T> Function() job, T empty, String what) async {
+      try {
+        return await job().timeout(const Duration(seconds: 30));
+      } on CommunityException catch (e) {
+        notes.add('$what: ${e.message}');
+      } catch (_) {
+        notes.add('$what could not be loaded.');
       }
-    } catch (_) {
-      if (mounted) {
-        setState(() {
-          _loading = false;
-          _error = const CommunityException('').message;
-        });
-      }
+      return empty;
     }
+
+    final results = await Future.wait<dynamic>([
+      safe<List<CommunityPerson>>(
+          _community.people, const <CommunityPerson>[], 'People'),
+      safe<List<Movie>>(() async {
+        final m = await _feed.loadMovies();
+        if (m.isEmpty) throw Exception('empty');
+        return m;
+      }, const <Movie>[], 'Movies'),
+      safe<List<Map<String, dynamic>>>(_community.watchInvitations,
+          const <Map<String, dynamic>>[], 'Invitations'),
+      safe<List<Map<String, dynamic>>>(_community.myWatchRooms,
+          const <Map<String, dynamic>>[], 'Your rooms'),
+    ]);
+    if (!mounted) return;
+    setState(() {
+      _people = (results[0] as List<CommunityPerson>)
+          .where((p) => p.email.toLowerCase() != _me)
+          .toList();
+      _movies = results[1] as List<Movie>;
+      _invitations = results[2] as List<Map<String, dynamic>>;
+      _rooms = results[3] as List<Map<String, dynamic>>;
+      _loading = false;
+      _error = notes.isEmpty ? null : notes.join('\n');
+    });
   }
 
   Future<void> _openRoom(Map<String, dynamic> room) async {
