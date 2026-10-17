@@ -468,6 +468,53 @@ class CommunityService extends ChangeNotifier {
     );
   }
 
+  /// Create a shared movie session and invite community members.
+  Future<Map<String, dynamic>> createWatchRoom({
+    required Movie movie,
+    required List<String> invitees,
+  }) async {
+    final d = await _request('/community/watch/rooms', body: {
+      'movie': {
+        'title': movie.title,
+        'url': movie.url,
+        'image': movie.image,
+        'tmdbId': movie.tmdbId,
+        'type': movie.isSeries ? 'tv' : 'movie',
+      },
+      'invitees': invitees,
+    });
+    if (d is! Map || d['room'] is! Map) {
+      throw const CommunityException('watch_room_failed');
+    }
+    return Map<String, dynamic>.from(d['room'] as Map);
+  }
+
+  Future<List<Map<String, dynamic>>> watchInvitations() async {
+    final d = await _request('/community/watch/invitations');
+    final raw = d is Map ? d['invitations'] : null;
+    if (raw is! List) return [];
+    return raw.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+  }
+
+  Future<Map<String, dynamic>> respondWatchInvitation(String roomId, bool accept) async {
+    final d = await _request('/community/watch/respond', body: {
+      'roomId': roomId,
+      'accept': accept,
+    });
+    if (d is! Map || d['room'] is! Map) {
+      throw const CommunityException('watch_room_failed');
+    }
+    return Map<String, dynamic>.from(d['room'] as Map);
+  }
+
+  Future<Map<String, dynamic>> watchRoom(String roomId) async {
+    final d = await _request('/community/watch/room?id=${Uri.encodeQueryComponent(roomId)}');
+    if (d is! Map || d['room'] is! Map) {
+      throw const CommunityException('watch_room_failed');
+    }
+    return Map<String, dynamic>.from(d['room'] as Map);
+  }
+
   Future<List<CommunityPerson>> people() async {
     final d = await _request('/community/people');
     final out = <CommunityPerson>[];
