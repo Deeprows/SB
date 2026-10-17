@@ -443,6 +443,19 @@ class CommunityService extends ChangeNotifier {
 
   // -------------------------------------------------------------- profiles
 
+  /// Saves this person's profile snapshot so other members can open it.
+  Future<void> pushProfileData(Map<String, dynamic> data) async {
+    await _request('/community/profile/data', body: {'data': data});
+  }
+
+  /// A member's saved profile snapshot, or null when they have none yet.
+  Future<Map<String, dynamic>?> profileData(String email) async {
+    final d = await _request(
+        '/community/profile/data?email=${Uri.encodeQueryComponent(email)}');
+    final j = d is Map ? d['data'] : null;
+    return j is Map ? Map<String, dynamic>.from(j) : null;
+  }
+
   Future<CommunityProfile> profile(String email) async {
     final d = await _request(
         '/community/profile?email=${Uri.encodeQueryComponent(email)}');
