@@ -136,9 +136,6 @@ class ProfileService extends ChangeNotifier {
   String _loadedFor = '\u0000';
   Future<void>? _loading;
 
-  /// Whose saved profile is loaded right now (lower-case Gmail or 'guest').
-  String get loadedFor => _loadedFor;
-
   List<UserList> get lists => List.unmodifiable(_lists);
   List<MovieReview> get reviews => List.unmodifiable(_reviews);
   List<CheckIn> get checkIns => List.unmodifiable(_checkIns);
@@ -321,40 +318,23 @@ class ProfileService extends ChangeNotifier {
   // ----------------------------------------------------------------- badges
 
   /// Earned automatically from what the person does in the app.
-  List<ProfileBadge> get badges => buildBadges(
-        ratings: RatingService.instance.ratedMovies.length,
-        watched: MovieLibrary.instance.history.length,
-        saved: MovieLibrary.instance.watchLater.length,
-        reviews: _reviews.length,
-        lists: _lists.length,
-        checkIns: _checkIns.length,
-        interests: _interests.length,
-        people: _people.length,
-      );
-
-  /// The badge rules, also used to show another member's badges.
-  static List<ProfileBadge> buildBadges({
-    required int ratings,
-    required int watched,
-    required int saved,
-    required int reviews,
-    required int lists,
-    required int checkIns,
-    required int interests,
-    required int people,
-  }) =>
-      [
-        ProfileBadge('first_rating', 'First Rating', 'Rate your first title', ratings, 1),
-        ProfileBadge('critic', 'Critic', 'Rate 10 titles', ratings, 10),
-        ProfileBadge('reviewer', 'Reviewer', 'Write your first review', reviews, 1),
-        ProfileBadge('movie_buff', 'Movie Buff', 'Watch 25 titles', watched, 25),
-        ProfileBadge('binge', 'Binge Watcher', 'Watch 100 titles', watched, 100),
-        ProfileBadge('collector', 'Collector', 'Save 10 titles to your Watchlist', saved, 10),
-        ProfileBadge('curator', 'Curator', 'Create your first list', lists, 1),
-        ProfileBadge('checkin', 'Regular', 'Check in 5 times', checkIns, 5),
-        ProfileBadge('taste', 'Taste Maker', 'Pick 3 interests', interests, 3),
-        ProfileBadge('fan', 'Superfan', 'Add 3 favorite people', people, 3),
-      ];
+  List<ProfileBadge> get badges {
+    final ratings = RatingService.instance.ratedMovies.length;
+    final watched = MovieLibrary.instance.history.length;
+    final saved = MovieLibrary.instance.watchLater.length;
+    return [
+      ProfileBadge('first_rating', 'First Rating', 'Rate your first title', ratings, 1),
+      ProfileBadge('critic', 'Critic', 'Rate 10 titles', ratings, 10),
+      ProfileBadge('reviewer', 'Reviewer', 'Write your first review', _reviews.length, 1),
+      ProfileBadge('movie_buff', 'Movie Buff', 'Watch 25 titles', watched, 25),
+      ProfileBadge('binge', 'Binge Watcher', 'Watch 100 titles', watched, 100),
+      ProfileBadge('collector', 'Collector', 'Save 10 titles to your Watchlist', saved, 10),
+      ProfileBadge('curator', 'Curator', 'Create your first list', _lists.length, 1),
+      ProfileBadge('checkin', 'Regular', 'Check in 5 times', _checkIns.length, 5),
+      ProfileBadge('taste', 'Taste Maker', 'Pick 3 interests', _interests.length, 3),
+      ProfileBadge('fan', 'Superfan', 'Add 3 favorite people', _people.length, 3),
+    ];
+  }
 
   int get earnedBadges => badges.where((b) => b.earned).length;
 }
