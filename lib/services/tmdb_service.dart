@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -51,23 +52,66 @@ class TmdbService {
     10768: 'War & Politics',
   };
 
+  // ---------------------------------------------------------- connection
+  //
+  // Some networks block api.themoviedb.org (the request just hangs, so the
+  // home page never gets its TMDB rows). Every request therefore tries up to
+  // three routes and remembers the one that worked, so the next calls go
+  // straight to it:
+  //   direct -> api.themoviedb.org
+  //   alt    -> api.tmdb.org (TMDB's own second address)
+  //   proxy  -> your Cloudflare Worker (`<feedBase>/tmdb/...`, see
+  //             cloudflare/worker.js), which fetches from TMDB for the phone.
+  static const _routes = ['direct', 'alt', 'proxy'];
+  static String _lastRoute = 'direct';
+
+  static String get _proxyBase =>
+      AppConfig.feedBase.trim().replaceAll(RegExp(r'/+$'), '');
+
+  /// Host for poster / backdrop images. Follows the API route: when TMDB can
+  /// only be reached through the Worker, images are loaded through it too.
+  static String get imageBase => (_lastRoute == 'proxy' && _proxyBase.isNotEmpty)
+      ? '$_proxyBase/tmdbimg'
+      : 'https://image.tmdb.org';
+
+  Uri? _uri(String route, String path, Map<String, String> q) {
+    switch (route) {
+      case 'alt':
+        return Uri.https('api.tmdb.org', '/3$path', q);
+      case 'proxy':
+        if (_proxyBase.isEmpty) return null;
+        final b = Uri.parse(_proxyBase);
+        return b.replace(path: '${b.path}/tmdb/3$path', queryParameters: q);
+      default:
+        return Uri.https('api.themoviedb.org', '/3$path', q);
+    }
+  }
+
   Future<dynamic> _get(String path, [Map<String, String> query = const {}]) async {
-    final uri = Uri.https('api.themoviedb.org', '/3$path', {
+    final q = <String, String>{
       'api_key': AppConfig.tmdbApiKey,
       'language': 'en-US',
       ...query,
-    });
-    // Slow connections (a few KB/s) need far more than 10 seconds for a
-    // trending list, so wait longer and try once more before giving up.
+    };
+    final order = [_lastRoute, ..._routes.where((r) => r != _lastRoute)];
+    // First pass is quick so a blocked route is skipped fast; the second
+    // pass is patient for very slow connections.
     for (var attempt = 0; attempt < 2; attempt++) {
-      try {
-        final res = await http.get(uri).timeout(const Duration(seconds: 30));
-        if (res.statusCode == 200) {
-          return jsonDecode(utf8.decode(res.bodyBytes));
+      final wait = Duration(seconds: attempt == 0 ? 10 : 15);
+      for (final route in order) {
+        final uri = _uri(route, path, q);
+        if (uri == null) continue;
+        try {
+          final res = await http.get(uri).timeout(wait);
+          if (res.statusCode == 200) {
+            _lastRoute = route;
+            return jsonDecode(utf8.decode(res.bodyBytes));
+          }
+          if (res.statusCode == 404) return null; // TMDB answered: no such title
+          debugPrint('TMDB $route $path -> HTTP ${res.statusCode}');
+        } catch (e) {
+          debugPrint('TMDB $route $path failed: $e');
         }
-        if (res.statusCode >= 400 && res.statusCode < 500) return null;
-      } catch (_) {
-        // timeout / no network: try again below
       }
     }
     return null;
@@ -120,7 +164,7 @@ class TmdbService {
       date: null, // keep "Added <date>" for rows you add yourself
       rating: rating,
       genres: genres.toSet().toList(),
-      image: poster.isEmpty ? '' : 'https://image.tmdb.org/t/p/w500$poster',
+      image: poster.isEmpty ? '' : '$imageBase/t/p/w500$poster',
       tmdbId: id,
     );
   }
@@ -231,25 +275,32 @@ class TmdbService {
     }
   }
 
-  /// TMDB's live "popular" list: movies ([tv] false) or series ([tv] true),
-  /// about 40 titles from `/movie/popular` or `/tv/popular`. Same saving and
-  /// 15 minute reuse as [trending]; [force] always asks TMDB.
+  /// TMDB's live "popular" list: movies ([tv] false) or series ([tv] true).
   Future<List<Movie>> popular(
-      {required bool tv, bool fetch = true, bool force = false}) async {
-    final type = tv ? 'tv' : 'movie';
-    final key = 'cache_tmdb_popular_$type';
+          {required bool tv, bool fetch = true, bool force = false}) =>
+      list('/${tv ? 'tv' : 'movie'}/popular',
+          type: tv ? 'tv' : 'movie', fetch: fetch, force: force);
+
+  /// Any TMDB list endpoint (`/movie/popular`, `/movie/now_playing`,
+  /// `/movie/top_rated`, `/tv/top_rated`...): about 40 titles. Saved after
+  /// every download, so [fetch] false returns the last saved copy instantly
+  /// (first paint, offline). A copy younger than 15 minutes is reused;
+  /// [force] always asks TMDB.
+  Future<List<Movie>> list(String path,
+      {required String type, bool fetch = true, bool force = false}) async {
+    final key = 'cache_tmdb_list${path.replaceAll('/', '_')}';
     final atKey = '${key}_at';
     final prefs = await SharedPreferences.getInstance();
     if (fetch) {
-      final age = DateTime.now().millisecondsSinceEpoch -
-          (prefs.getInt(atKey) ?? 0);
+      final age =
+          DateTime.now().millisecondsSinceEpoch - (prefs.getInt(atKey) ?? 0);
       final fresh = prefs.getString(key) != null &&
           age >= 0 &&
           age < const Duration(minutes: 15).inMilliseconds;
       if (force || !fresh) {
         final pages = await Future.wait([
-          _get('/$type/popular', {'page': '1'}),
-          _get('/$type/popular', {'page': '2'}),
+          _get(path, {'page': '1'}),
+          _get(path, {'page': '2'}),
         ]);
         final all = <dynamic>[];
         for (final p in pages) {
@@ -294,6 +345,14 @@ class TmdbService {
     'War': ['10752', '10768'],
     'Western': ['37', '37'],
   };
+
+  /// Categories shown on the home page and in the Categories sheet when TMDB
+  /// is on (home rows use the first six).
+  static List<String> get categories => const [
+        'Action', 'Comedy', 'Drama', 'Horror', 'Sci-Fi', 'Animation',
+        'Thriller', 'Romance', 'Crime', 'Adventure', 'Fantasy', 'Family',
+        'Mystery', 'Documentary', 'War', 'History', 'Western', 'Music',
+      ];
 
   /// Popular TMDB movies and series of one category (movies and series
   /// alternate in the result). Empty for categories TMDB does not have.
