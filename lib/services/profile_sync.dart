@@ -32,11 +32,10 @@ class ProfileSync {
     ]) {
       l.addListener(_schedule);
     }
-    // Load what is saved on the phone; the loads notify and schedule a push.
-    ProfileService.instance.load();
-    RatingService.instance.load();
-    MovieLibrary.instance.load();
-    _schedule();
+    // Wait until the app has been up for a while before touching anything,
+    // so the profile copy can never compete with the home screen loading.
+    // The first push happens ~30 seconds after launch.
+    _schedule(const Duration(seconds: 30));
   }
 
   void _schedule([Duration after = const Duration(seconds: 5)]) {
@@ -74,6 +73,13 @@ class ProfileSync {
   }
 
   Future<void> _push() async {
+    try {
+      await ProfileService.instance.load();
+      await RatingService.instance.load();
+      await MovieLibrary.instance.load();
+    } catch (_) {
+      return;
+    }
     final user = AuthService.instance.user;
     if (user == null || !CommunityService.instance.available) return;
     final email = user.email.trim().toLowerCase();
