@@ -1,10 +1,8 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:ui' show ImageFilter;
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show rootBundle;
 
 import '../config.dart';
 import '../models/movie.dart';
@@ -38,11 +36,6 @@ class _MoviesScreenState extends State<MoviesScreen> {
   List<Movie> _trending = const []; // TMDB trending, most popular first
   List<Movie> _popMovies = const []; // TMDB popular movies
   List<Movie> _popTv = const []; // TMDB popular series
-  List<Movie> _nowPlaying = const []; // TMDB movies in theatres now
-  List<Movie> _topMovies = const []; // TMDB top rated movies
-  List<Movie> _topTv = const []; // TMDB top rated series
-  bool _tmdbTried = false; // the first TMDB download has finished (ok or not)
-  DateTime _homeRowsAt = DateTime.fromMillisecondsSinceEpoch(0);
   bool _homeRowsBusy = false;
   bool _loading = true;
   String _query = '';
@@ -98,9 +91,8 @@ class _MoviesScreenState extends State<MoviesScreen> {
     _load().then((_) {
       if (AppConfig.moviesUrl.isNotEmpty) _load(remote: true);
     });
-    // One after the other: on a slow connection Trending / Top 10 arrive
-    // first instead of fighting the other lists for the same bandwidth.
-    _loadTrending().whenComplete(_loadPopular);
+    _loadTrending();
+    _loadPopular();
     ContentSync.tick.addListener(_onSync);
     AppLocale.notifier.addListener(_onLanguage);
     MovieLibrary.instance
@@ -137,10 +129,6 @@ class _MoviesScreenState extends State<MoviesScreen> {
     _load(remote: true);
     _loadTrending();
     _loadPopular();
-    // Category rows follow TMDB too (at most every 15 minutes).
-    if (DateTime.now().difference(_homeRowsAt) > const Duration(minutes: 15)) {
-      _fetchHomeRows(refresh: true);
-    }
   }
 
   /// A new day: new shuffle and a fresh copy of every TMDB list.
@@ -177,82 +165,35 @@ class _MoviesScreenState extends State<MoviesScreen> {
     super.dispose();
   }
 
-  String? _loadError;
-
-  /// True while the home is built from TMDB. When TMDB could not be reached
-  /// at all (nothing downloaded and nothing saved), this turns false and the
-  /// normal home built from your own list is shown instead; it switches back
-  /// by itself as soon as TMDB answers.
-  bool get _live =>
-      TmdbService.enabled &&
-      !(_tmdbTried &&
-          _trending.isEmpty &&
-          _popMovies.isEmpty &&
-          _popTv.isEmpty);
-
-  /// The list shipped inside the app, read straight from the asset with no
-  /// TMDB or network step, so the home always has something to show.
-  Future<List<Movie>> _bundledList() async {
-    final d = jsonDecode(await rootBundle.loadString('assets/data/movies.json'));
-    final seen = <String>{};
-    final out = <Movie>[];
-    if (d is List) {
-      for (final r in d) {
-        final m = Movie.tryParse(r);
-        if (m != null && seen.add(m.url)) out.add(m);
-      }
-    }
-    return out;
-  }
-
   Future<void> _load({bool remote = false}) async {
-    List<Movie>? list;
-    String? error;
-    try {
-      // Never let the home spinner run for ever: a slow or failing load is
-      // given up on and the rows that are ready (TMDB lists) are shown.
-      list = await feed
-          .loadMovies(remote: remote)
-          .timeout(Duration(seconds: remote ? 60 : 20));
-    } catch (e) {
-      error = '$e';
-      debugPrint('Home list could not be loaded: $e');
-    }
-    if ((list == null || list.isEmpty) && _all.isEmpty) {
-      try {
-        list = await _bundledList();
-      } catch (e) {
-        error = '${error ?? ''} / $e';
-      }
-    }
+    final list = await feed.loadMovies(remote: remote);
     if (!mounted) return;
     setState(() {
-      if (list != null && list.isNotEmpty) _all = list;
-      _loadError = _all.isEmpty ? (error ?? 'The movie list is empty.') : null;
+      _all = list;
       _loading = false;
     });
     _fetchHomeRows();
   }
 
-  /// Saved copy first (instant), then TMDB's live lists: popular movies and
-  /// series, now playing, top rated movies and series.
+  /// Saved copy first (instant), then TMDB's live popular movies + series.
   Future<void> _loadPopular({bool force = false}) async {
     if (!TmdbService.enabled) return;
-    final jobs = <(String, String, void Function(List<Movie>))>[
-      ('/movie/popular', 'movie', (List<Movie> l) => _popMovies = l),
-      ('/tv/popular', 'tv', (List<Movie> l) => _popTv = l),
-      ('/movie/now_playing', 'movie', (List<Movie> l) => _nowPlaying = l),
-      ('/movie/top_rated', 'movie', (List<Movie> l) => _topMovies = l),
-      ('/tv/top_rated', 'tv', (List<Movie> l) => _topTv = l),
-    ];
     try {
-      for (final j in jobs) {
-        final c = await tmdb.list(j.$1, type: j.$2, fetch: false);
-        if (mounted && c.isNotEmpty) setState(() => j.$3(c));
+      final m = await tmdb.popular(tv: false, fetch: false);
+      final t = await tmdb.popular(tv: true, fetch: false);
+      if (mounted && (m.isNotEmpty || t.isNotEmpty)) {
+        setState(() {
+          if (m.isNotEmpty) _popMovies = m;
+          if (t.isNotEmpty) _popTv = t;
+        });
       }
-      for (final j in jobs) {
-        final f = await tmdb.list(j.$1, type: j.$2, force: force);
-        if (mounted && f.isNotEmpty) setState(() => j.$3(f));
+      final fm = await tmdb.popular(tv: false, force: force);
+      final ft = await tmdb.popular(tv: true, force: force);
+      if (mounted) {
+        setState(() {
+          if (fm.isNotEmpty) _popMovies = fm;
+          if (ft.isNotEmpty) _popTv = ft;
+        });
       }
     } catch (_) {}
   }
@@ -260,14 +201,13 @@ class _MoviesScreenState extends State<MoviesScreen> {
   /// Fills the home category rows (the first six categories) with TMDB's
   /// popular titles of that category. Rows keep your own list until the
   /// TMDB titles arrive, or when TMDB can't be reached.
-  Future<void> _fetchHomeRows({bool refresh = false}) async {
+  Future<void> _fetchHomeRows() async {
     if (_homeRowsBusy) return;
     if (!AppConfig.tmdbCategories || !TmdbService.enabled) return;
     _homeRowsBusy = true;
-    _homeRowsAt = DateTime.now();
     try {
       for (final g in _genres.take(6)) {
-        if (!refresh && _discover.containsKey(g)) continue;
+        if (_discover.containsKey(g)) continue;
         final res = await tmdb.discover(g);
         if (!mounted) return;
         if (res.isNotEmpty) setState(() => _discover[g] = res);
@@ -285,11 +225,7 @@ class _MoviesScreenState extends State<MoviesScreen> {
       if (mounted && cached.isNotEmpty) setState(() => _trending = cached);
       final fresh = await tmdb.trending(force: force);
       if (mounted && fresh.isNotEmpty) setState(() => _trending = fresh);
-    } catch (_) {
-      // handled below: the home shows a retry card when nothing arrived
-    } finally {
-      if (mounted && !_tmdbTried) setState(() => _tmdbTried = true);
-    }
+    } catch (_) {}
   }
 
   /// Searches the whole TMDB catalogue shortly after typing stops.
@@ -327,10 +263,6 @@ class _MoviesScreenState extends State<MoviesScreen> {
   }
 
   List<String> get _genres {
-    // With TMDB on, the categories are TMDB's own (not read from your list).
-    if (_live && AppConfig.tmdbCategories) {
-      return TmdbService.categories;
-    }
     final counts = <String, int>{};
     for (final m in _all) {
       for (final g in m.genres) {
@@ -392,11 +324,8 @@ class _MoviesScreenState extends State<MoviesScreen> {
             await _load(remote: true);
             await _loadTrending(force: true);
             await _loadPopular(force: true);
-            await _fetchHomeRows(refresh: true);
             await _fetchDiscover(force: true);
-            return TmdbService.enabled
-                ? _trending.isNotEmpty
-                : !feed.lastRemoteFailed;
+            return !feed.lastRemoteFailed;
           },
           child: CustomScrollView(
             controller: _sc,
@@ -653,20 +582,13 @@ class _MoviesScreenState extends State<MoviesScreen> {
     final heroes = _heroes();
     _heroCount = heroes.length;
     final rows = _rows();
-    final tmdbOn = TmdbService.enabled && AppConfig.tmdbTrending;
-    final noTmdb = _trending.isEmpty && _popMovies.isEmpty && _popTv.isEmpty;
-    // Waiting for the first TMDB answer (or, with TMDB off, for your list).
-    final waiting = (tmdbOn && noTmdb && !_tmdbTried) ||
-        (_all.isEmpty && _loading && (!tmdbOn || (noTmdb && _tmdbTried)));
-    // Retry card only when neither TMDB nor your own list gave anything.
-    final failed = _all.isEmpty && !_loading && (!tmdbOn || noTmdb);
     return [
       SliverToBoxAdapter(
         child: heroes.isEmpty
             ? SizedBox(height: top + 110)
             : _billboard(heroes, top),
       ),
-      if (waiting)
+      if (_loading && _all.isEmpty && _trending.isEmpty)
         SliverFillRemaining(
           hasScrollBody: false,
           child: Center(child: CircularProgressIndicator(color: Ui.red)),
@@ -677,44 +599,6 @@ class _MoviesScreenState extends State<MoviesScreen> {
             padding: const EdgeInsets.only(top: 8, bottom: 28),
             child: Column(
               children: [
-                if (failed)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
-                    child: Column(
-                      children: [
-                        Icon(Icons.movie_filter_rounded,
-                            size: 40, color: Ui.muted),
-                        const SizedBox(height: 10),
-                        Text(
-                            'Movies could not be loaded. Check your connection and try again.'
-                                .tr,
-                            textAlign: TextAlign.center,
-                            style: TextStyle(color: Ui.muted)),
-                        if (_loadError != null) ...[
-                          const SizedBox(height: 6),
-                          Text(_loadError!,
-                              maxLines: 3,
-                              overflow: TextOverflow.ellipsis,
-                              textAlign: TextAlign.center,
-                              style: TextStyle(color: Ui.dim, fontSize: 11)),
-                        ],
-                        const SizedBox(height: 12),
-                        OutlinedButton.icon(
-                          onPressed: () {
-                            setState(() {
-                              _loading = true;
-                              _tmdbTried = false;
-                            });
-                            _load().then((_) => _loadTrending(force: true));
-                            _loadPopular(force: true);
-                            _fetchHomeRows(refresh: true);
-                          },
-                          icon: const Icon(Icons.refresh_rounded),
-                          label: Text('Retry'.tr),
-                        ),
-                      ],
-                    ),
-                  ),
                 for (final r in rows)
                   Padding(
                       key: r.key,
@@ -735,16 +619,7 @@ class _MoviesScreenState extends State<MoviesScreen> {
       if (m.image.startsWith('http')) out.add((m, true));
       if (out.length >= 5) return out;
     }
-    if (out.isEmpty) {
-      for (final m in _popMovies) {
-        if (m.image.startsWith('http')) out.add((m, false));
-        if (out.length >= 5) break;
-      }
-    }
-    // With TMDB on the billboard is never filled from the static list.
-    if (out.isNotEmpty || (_live && AppConfig.tmdbTrending)) {
-      return out;
-    }
+    if (out.isNotEmpty) return out;
     final withArt = _all.where((m) => m.image.startsWith('http')).toList()
       ..sort((a, b) => _dayRank(a).compareTo(_dayRank(b)));
     return [for (final m in withArt.take(5)) (m, false)];
@@ -943,37 +818,33 @@ class _MoviesScreenState extends State<MoviesScreen> {
     final newest = _all.where((m) => m.date != null).toList()
       ..sort((a, b) => b.date!.compareTo(a.date!));
 
-    // With TMDB on, every row except Continue Watching and My List (the
-    // person's own) comes live from TMDB. Your own list is used only when
-    // TMDB is switched off in config.dart (no API key).
-    final live = _live;
-
     add('Continue Watching'.tr, lib.history.map((e) => e.movie));
-    if (_trending.isNotEmpty) {
-      add('Trending Now'.tr, _trending);
-      add('Top 10 Today'.tr, _trending, numbered: true, max: 10, min: 5);
-    } else if (!live) {
-      add('Popular on ${AppConfig.appName}', ranked);
-    }
-    // Latest Trailers sits right under Top 10 Today.
-    if (live) {
+    // Latest Trailers sits right under Continue Watching (or at the top when
+    // there is no Continue Watching row yet).
+    if (TmdbService.enabled) {
       out.add(LatestTrailersRow(
           key: const ValueKey('latest-trailers'), onOpen: _details));
     }
+    if (_trending.isNotEmpty) {
+      add('Trending Now'.tr, _trending);
+      add('Top 10 Today'.tr, _trending, numbered: true, max: 10, min: 5);
+    } else {
+      add('Popular on ${AppConfig.appName}', ranked);
+    }
     add('My List'.tr, lib.watchLater);
-    if (!live) add('New on ${AppConfig.appName}', newest);
-    add('Now Playing in Theaters'.tr, _nowPlaying);
+    add('New on ${AppConfig.appName}', newest);
+    // Popular and category rows come from TMDB's live lists; your own list
+    // is the fallback while they load or when TMDB can't be reached.
     add('Popular Movies'.tr,
-        live ? _popMovies : ranked.where((m) => !m.isSeries));
-    add('TV Shows'.tr, live ? _popTv : ranked.where((m) => m.isSeries));
-    add('Top Rated Movies'.tr, _topMovies);
-    add('Top Rated TV Shows'.tr, _topTv);
+        _popMovies.isNotEmpty ? _popMovies : ranked.where((m) => !m.isSeries));
+    add('TV Shows'.tr,
+        _popTv.isNotEmpty ? _popTv : ranked.where((m) => m.isSeries));
     for (final g in _genres.take(6)) {
-      final row = _discover[g];
+      final live = _discover[g];
       add(g.tr,
-          (row != null && row.isNotEmpty)
-              ? row
-              : (live ? const <Movie>[] : ranked.where((m) => m.genres.contains(g))),
+          (live != null && live.isNotEmpty)
+              ? live
+              : ranked.where((m) => m.genres.contains(g)),
           min: 4);
     }
     return out;
@@ -984,15 +855,10 @@ class _MoviesScreenState extends State<MoviesScreen> {
   List<Widget> _gridSlivers(String q, double top) {
     bool typeOk(Movie m) => _type == null || m.isSeries == (_type == 'tv');
     bool genreOk(Movie m) => _genre == null || m.genres.contains(_genre);
-    // With TMDB on, browsing (no search text) lists TMDB's live titles, not
-    // your own list. Searching still checks your own list first.
-    final live = _live;
-    final filtered = (live && q.isEmpty)
-        ? <Movie>[]
-        : _all.where((m) {
-            if (!typeOk(m) || !genreOk(m)) return false;
-            return q.isEmpty || m.name.toLowerCase().contains(q);
-          }).toList();
+    final filtered = _all.where((m) {
+      if (!typeOk(m) || !genreOk(m)) return false;
+      return q.isEmpty || m.name.toLowerCase().contains(q);
+    }).toList();
 
     // TMDB titles from the search box and from the selected category come
     // after the ones in your own list.
@@ -1017,19 +883,10 @@ class _MoviesScreenState extends State<MoviesScreen> {
       for (final m in _discover[_genre] ?? const <Movie>[]) {
         addExtra(m, matchName: true);
       }
-    } else if (live && q.isEmpty) {
-      final src = _type == 'tv'
-          ? [..._popTv, ..._topTv]
-          : _type == 'movie'
-              ? [..._popMovies, ..._nowPlaying, ..._topMovies]
-              : [..._trending, ..._popMovies, ..._popTv];
-      for (final m in src) {
-        addExtra(m, matchName: false);
-      }
     }
     // Browsing (no search text): a fresh order every day. Searching keeps
     // the best matches first.
-    if (q.isEmpty && !live) {
+    if (q.isEmpty) {
       final rank = {for (final m in filtered) m.url: _dayRank(m)};
       filtered.sort((a, b) => rank[a.url]!.compareTo(rank[b.url]!));
     }
@@ -1037,8 +894,7 @@ class _MoviesScreenState extends State<MoviesScreen> {
     return [
       SliverToBoxAdapter(
           child: SizedBox(height: top + (_searching ? 64 : 104))),
-      if ((!live && _loading) ||
-          (filtered.isEmpty && (_discovering || (live && !_tmdbTried))))
+      if (_loading || (filtered.isEmpty && _discovering))
         SliverFillRemaining(
           hasScrollBody: false,
           child: Center(child: CircularProgressIndicator(color: Ui.red)),
