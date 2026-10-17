@@ -47,6 +47,17 @@ class DownloadNotifier {
     }
   }
 
+  /// Every cookie the WebView holds for [url], HttpOnly ones included.
+  /// Download hosts (HubDrive, HBLinks...) often check these and answer 403
+  /// to requests that lack them.
+  static Future<String> cookiesFor(String url) async {
+    try {
+      return await _channel.invokeMethod<String>('cookies', {'url': url}) ?? '';
+    } catch (_) {
+      return '';
+    }
+  }
+
   /// A "finished" or "failed" notification that stays in the tray.
   static Future<void> result(String name,
       {required bool ok, String? detail}) async {
