@@ -72,6 +72,44 @@ const CORS = {
     "content-type, authorization, x-community-email, x-community-key, x-community-name, x-community-photo, x-install-id, x-app-version, x-platform",
 };
 
+const TMDB_DEFAULT_KEY = "b83de997ce0ca0406c12cab7f256e43a";
+
+async function tmdbProxy(request, env, ctx, url) {
+  if (request.method !== "GET") return json({ error: "method not allowed" }, 405);
+  const path = url.pathname.slice("/tmdb".length); // /3/trending/all/day
+  if (!/^\/3\/[a-z0-9_\/]+$/i.test(path) || /^\/3\/(account|authentication|list|guest_session)/i.test(path)) {
+    return json({ error: "not allowed" }, 403);
+  }
+  const params = new URLSearchParams(url.search);
+  params.delete("api_key");
+  params.sort();
+  const cache = caches.default;
+  const cacheKey = new Request(`https://tmdb-cache.invalid${path}?${params}`);
+  const hit = await cache.match(cacheKey);
+  if (hit) return hit;
+
+  const upstreamParams = new URLSearchParams(params);
+  upstreamParams.set("api_key", env.TMDB_API_KEY || TMDB_DEFAULT_KEY);
+  let up;
+  try {
+    up = await fetch(`https://api.themoviedb.org${path}?${upstreamParams}`, { headers: { accept: "application/json" } });
+  } catch (e) {
+    return json({ error: "tmdb_unreachable" }, 502);
+  }
+  const body = await up.arrayBuffer();
+  const res = new Response(body, {
+    status: up.status,
+    headers: {
+      ...CORS,
+      "content-type": "application/json; charset=utf-8",
+      "x-tmdb-proxy": "1",
+      "cache-control": up.ok ? "public, max-age=600" : "no-store",
+    },
+  });
+  if (up.ok) ctx.waitUntil(cache.put(cacheKey, res.clone()));
+  return res;
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -134,6 +172,12 @@ export default {
     // Accounts: sign up first, then log in (see AUTH.md).
     if (url.pathname.startsWith("/auth/")) {
       return accounts(request, env, url);
+    }
+
+    // TMDB proxy: the app asks the Worker, the Worker asks TMDB (cached for
+    // 10 minutes). Works when a phone's network blocks or throttles TMDB.
+    if (url.pathname.startsWith("/tmdb/")) {
+      return tmdbProxy(request, env, ctx, url);
     }
 
     // Movie community. Every route verifies a Google ID token server-side.
