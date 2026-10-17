@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:ui' show ImageFilter;
 
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/material.dart';
 
 import '../config.dart';
@@ -166,13 +167,29 @@ class _MoviesScreenState extends State<MoviesScreen> {
   }
 
   Future<void> _load({bool remote = false}) async {
-    final list = await feed.loadMovies(remote: remote);
+    List<Movie>? list;
+    try {
+      // Never let the home page wait for ever on one slow step.
+      list = await feed
+          .loadMovies(remote: remote)
+          .timeout(Duration(seconds: remote ? 25 : 12));
+    } catch (e) {
+      debugPrint('Home movie list failed: $e');
+    }
     if (!mounted) return;
+    final got = list;
     setState(() {
-      _all = list;
-      _loading = false;
+      // Keep what is already on screen if this load failed.
+      if (got != null) _all = got;
+      _loading = false; // always stop the spinner
     });
     _fetchHomeRows();
+    // First load failed or came back empty: try again from TMDB / network.
+    if (!remote && (got == null || got.isEmpty)) {
+      Future<void>.delayed(const Duration(seconds: 1), () {
+        if (mounted) _load(remote: true);
+      });
+    }
   }
 
   /// Saved copy first (instant), then TMDB's live popular movies + series.
