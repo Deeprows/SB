@@ -146,6 +146,15 @@ export default {
       return subscriptions(request, env, url);
     }
 
+    // TMDB proxy: for phones whose network blocks themoviedb.org. The app
+    // tries it automatically when the direct connection fails.
+    if (
+      (url.pathname.startsWith("/tmdb/") || url.pathname.startsWith("/tmdbimg/")) &&
+      (request.method === "GET" || request.method === "HEAD")
+    ) {
+      return tmdbProxy(env, url);
+    }
+
     // Feed routes.
     const m = /^\/feed\/([a-z0-9_-]+\.json)$/i.exec(url.pathname);
 
@@ -163,6 +172,59 @@ export default {
     }, 404);
   },
 };
+
+// ---------------------------------------------------------------- TMDB proxy
+//
+// GET /tmdb/3/trending/all/day?api_key=...   -> https://api.themoviedb.org/3/...
+// GET /tmdbimg/t/p/w500/<poster>.jpg         -> https://image.tmdb.org/t/p/w500/...
+// Only read-only catalogue paths are allowed. If the Worker has a TMDB_API_KEY
+// variable it is used instead of the key sent by the app. Answers are kept at
+// Cloudflare's edge for 5 minutes (images: 1 day).
+const TMDB_API_PATH =
+  /^\/3\/(trending|movie|tv|discover|search|find|person|genre)\//;
+const TMDB_IMG_PATH = /^\/t\/p\/[a-zA-Z0-9]+\/[A-Za-z0-9_\-]+\.(jpg|jpeg|png|webp)$/;
+
+async function tmdbProxy(env, url) {
+  try {
+    if (url.pathname.startsWith("/tmdbimg/")) {
+      const path = url.pathname.slice("/tmdbimg".length);
+      if (!TMDB_IMG_PATH.test(path)) return json({ error: "not allowed" }, 400);
+      const res = await fetch("https://image.tmdb.org" + path, {
+        cf: { cacheTtl: 86400, cacheEverything: true },
+      });
+      return new Response(res.body, {
+        status: res.status,
+        headers: {
+          ...CORS,
+          "content-type": res.headers.get("content-type") || "image/jpeg",
+          "cache-control": "public, max-age=86400",
+        },
+      });
+    }
+
+    const path = url.pathname.slice("/tmdb".length);
+    if (!TMDB_API_PATH.test(path)) return json({ error: "not allowed" }, 400);
+    const target = new URL("https://api.themoviedb.org" + path);
+    for (const [k, v] of url.searchParams) target.searchParams.set(k, v);
+    if (env.TMDB_API_KEY) target.searchParams.set("api_key", env.TMDB_API_KEY);
+    if (!target.searchParams.get("api_key")) {
+      return json({ error: "no api key" }, 400);
+    }
+    const res = await fetch(target.toString(), {
+      cf: { cacheTtl: 300, cacheEverything: true },
+    });
+    return new Response(res.body, {
+      status: res.status,
+      headers: {
+        ...CORS,
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "public, max-age=60",
+      },
+    });
+  } catch (e) {
+    return json({ error: "tmdb unreachable" }, 502);
+  }
+}
 
 // ------------------------------------------------------------------ analytics
 
