@@ -93,8 +93,9 @@ class _MoviesScreenState extends State<MoviesScreen> {
     _load().then((_) {
       if (AppConfig.moviesUrl.isNotEmpty) _load(remote: true);
     });
-    _loadTrending();
-    _loadPopular();
+    // One after the other: on a slow connection Trending / Top 10 arrive
+    // first instead of fighting the other lists for the same bandwidth.
+    _loadTrending().whenComplete(_loadPopular);
     ContentSync.tick.addListener(_onSync);
     AppLocale.notifier.addListener(_onLanguage);
     MovieLibrary.instance
