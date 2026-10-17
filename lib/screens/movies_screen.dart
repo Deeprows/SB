@@ -881,6 +881,42 @@ class _MoviesScreenState extends State<MoviesScreen> {
     );
   }
 
+  Widget _tmdbNotice() => Container(
+        margin: const EdgeInsets.fromLTRB(16, 4, 16, 14),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: .06),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Ui.glassLine),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.cloud_off_rounded, color: Ui.muted),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Live movie lists could not load.'.tr,
+                      style: const TextStyle(fontWeight: FontWeight.w800)),
+                  if (TmdbService.lastNote.isNotEmpty)
+                    Text(TmdbService.lastNote,
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(color: Ui.dim, fontSize: 11)),
+                ],
+              ),
+            ),
+            TextButton(
+              onPressed: () {
+                _loadTrending(force: true).whenComplete(_loadPopular);
+              },
+              child: Text('Retry'.tr),
+            ),
+          ],
+        ),
+      );
+
   List<Widget> _rows() {
     final lib = MovieLibrary.instance;
     final out = <Widget>[];
@@ -899,40 +935,27 @@ class _MoviesScreenState extends State<MoviesScreen> {
           title: title, movies: list, onTap: _details, numbered: numbered));
     }
 
-    final rank = {for (final m in _all) m.url: _dayRank(m)};
-    final ranked = [..._all]..sort((a, b) => rank[a.url]!.compareTo(rank[b.url]!));
-    final newest = _all.where((m) => m.date != null).toList()
-      ..sort((a, b) => b.date!.compareTo(a.date!));
-
     add('Continue Watching'.tr, lib.history.map((e) => e.movie));
     final hot = _hot;
     if (hot.isNotEmpty) {
       add('Trending Now'.tr, hot);
       add('Top 10 Today'.tr, hot, numbered: true, max: 10, min: 5);
-    } else {
-      add('Popular on ${AppConfig.appName}', ranked);
+    } else if (TmdbService.enabled && !_loading) {
+      // TMDB's live lists did not arrive: say why instead of filling the
+      // home with copies of your own list.
+      out.add(_tmdbNotice());
     }
-    // Latest Trailers sits right under Top 10 Today (or under the Popular
-    // row when there is no Top 10 yet).
+    // Latest Trailers sits right under Top 10 Today.
     if (TmdbService.enabled) {
       out.add(LatestTrailersRow(
           key: const ValueKey('latest-trailers'), onOpen: _details));
     }
     add('My List'.tr, lib.watchLater);
-    add('New on ${AppConfig.appName}', newest);
-    // Popular and category rows come from TMDB's live lists; your own list
-    // is the fallback while they load or when TMDB can't be reached.
-    add('Popular Movies'.tr,
-        _popMovies.isNotEmpty ? _popMovies : ranked.where((m) => !m.isSeries));
-    add('TV Shows'.tr,
-        _popTv.isNotEmpty ? _popTv : ranked.where((m) => m.isSeries));
+    // Popular and category rows come only from TMDB's live lists.
+    add('Popular Movies'.tr, _popMovies);
+    add('TV Shows'.tr, _popTv);
     for (final g in _genres.take(6)) {
-      final live = _discover[g];
-      add(g.tr,
-          (live != null && live.isNotEmpty)
-              ? live
-              : ranked.where((m) => m.genres.contains(g)),
-          min: 4);
+      add(g.tr, _discover[g] ?? const <Movie>[], min: 4);
     }
     return out;
   }
