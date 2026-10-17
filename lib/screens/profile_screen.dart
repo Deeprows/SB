@@ -1283,7 +1283,7 @@ class _MemberProfileScreenState extends State<MemberProfileScreen> {
             ),
             const SizedBox(height: 12),
             FilledButton.icon(
-              onPressed: () => open(const WatchTogetherScreen()),
+              onPressed: () => open(WatchTogetherScreen(inviteEmail: widget.email)),
               icon: const Icon(Icons.groups_rounded),
               label: Text('Watch Together'.tr),
               style: FilledButton.styleFrom(
