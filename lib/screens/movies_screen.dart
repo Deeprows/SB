@@ -38,6 +38,19 @@ class _MoviesScreenState extends State<MoviesScreen> {
   List<Movie> _trending = const []; // TMDB trending, most popular first
   List<Movie> _popMovies = const []; // TMDB popular movies
   List<Movie> _popTv = const []; // TMDB popular series
+
+  /// Today's trending titles; when TMDB's trending list could not be loaded
+  /// the popular movies and series are mixed in its place, so the billboard
+  /// and Top 10 are never missing.
+  List<Movie> get _hot {
+    if (_trending.isNotEmpty) return _trending;
+    final out = <Movie>[];
+    for (var i = 0; i < 20; i++) {
+      if (i < _popMovies.length) out.add(_popMovies[i]);
+      if (i < _popTv.length) out.add(_popTv[i]);
+    }
+    return out;
+  }
   bool _homeRowsBusy = false;
   bool _loading = true;
   String _query = '';
@@ -627,7 +640,7 @@ class _MoviesScreenState extends State<MoviesScreen> {
             ? SizedBox(height: top + 110)
             : _billboard(heroes, top),
       ),
-      if (_loading && _all.isEmpty && _trending.isEmpty)
+      if (_loading && _all.isEmpty && _hot.isEmpty)
         SliverFillRemaining(
           hasScrollBody: false,
           child: Center(child: CircularProgressIndicator(color: Ui.red)),
@@ -638,7 +651,7 @@ class _MoviesScreenState extends State<MoviesScreen> {
             padding: const EdgeInsets.only(top: 8, bottom: 28),
             child: Column(
               children: [
-                if (_all.isEmpty && _trending.isEmpty)
+                if (_all.isEmpty && _hot.isEmpty)
                   Padding(
                     padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
                     child: Column(
@@ -688,7 +701,7 @@ class _MoviesScreenState extends State<MoviesScreen> {
   /// the day's shuffled picks. Each is (title, isTrending).
   List<(Movie, bool)> _heroes() {
     final out = <(Movie, bool)>[];
-    for (final m in _trending) {
+    for (final m in _hot) {
       if (m.image.startsWith('http')) out.add((m, true));
       if (out.length >= 5) return out;
     }
@@ -892,9 +905,10 @@ class _MoviesScreenState extends State<MoviesScreen> {
       ..sort((a, b) => b.date!.compareTo(a.date!));
 
     add('Continue Watching'.tr, lib.history.map((e) => e.movie));
-    if (_trending.isNotEmpty) {
-      add('Trending Now'.tr, _trending);
-      add('Top 10 Today'.tr, _trending, numbered: true, max: 10, min: 5);
+    final hot = _hot;
+    if (hot.isNotEmpty) {
+      add('Trending Now'.tr, hot);
+      add('Top 10 Today'.tr, hot, numbered: true, max: 10, min: 5);
     } else {
       add('Popular on ${AppConfig.appName}', ranked);
     }
