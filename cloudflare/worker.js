@@ -146,15 +146,6 @@ export default {
       return subscriptions(request, env, url);
     }
 
-    // TMDB proxy: for phones whose network blocks themoviedb.org. The app
-    // tries it automatically when the direct connection fails.
-    if (
-      (url.pathname.startsWith("/tmdb/") || url.pathname.startsWith("/tmdbimg/")) &&
-      (request.method === "GET" || request.method === "HEAD")
-    ) {
-      return tmdbProxy(env, url);
-    }
-
     // Feed routes.
     const m = /^\/feed\/([a-z0-9_-]+\.json)$/i.exec(url.pathname);
 
@@ -172,59 +163,6 @@ export default {
     }, 404);
   },
 };
-
-// ---------------------------------------------------------------- TMDB proxy
-//
-// GET /tmdb/3/trending/all/day?api_key=...   -> https://api.themoviedb.org/3/...
-// GET /tmdbimg/t/p/w500/<poster>.jpg         -> https://image.tmdb.org/t/p/w500/...
-// Only read-only catalogue paths are allowed. If the Worker has a TMDB_API_KEY
-// variable it is used instead of the key sent by the app. Answers are kept at
-// Cloudflare's edge for 5 minutes (images: 1 day).
-const TMDB_API_PATH =
-  /^\/3\/(trending|movie|tv|discover|search|find|person|genre)\//;
-const TMDB_IMG_PATH = /^\/t\/p\/[a-zA-Z0-9]+\/[A-Za-z0-9_\-]+\.(jpg|jpeg|png|webp)$/;
-
-async function tmdbProxy(env, url) {
-  try {
-    if (url.pathname.startsWith("/tmdbimg/")) {
-      const path = url.pathname.slice("/tmdbimg".length);
-      if (!TMDB_IMG_PATH.test(path)) return json({ error: "not allowed" }, 400);
-      const res = await fetch("https://image.tmdb.org" + path, {
-        cf: { cacheTtl: 86400, cacheEverything: true },
-      });
-      return new Response(res.body, {
-        status: res.status,
-        headers: {
-          ...CORS,
-          "content-type": res.headers.get("content-type") || "image/jpeg",
-          "cache-control": "public, max-age=86400",
-        },
-      });
-    }
-
-    const path = url.pathname.slice("/tmdb".length);
-    if (!TMDB_API_PATH.test(path)) return json({ error: "not allowed" }, 400);
-    const target = new URL("https://api.themoviedb.org" + path);
-    for (const [k, v] of url.searchParams) target.searchParams.set(k, v);
-    if (env.TMDB_API_KEY) target.searchParams.set("api_key", env.TMDB_API_KEY);
-    if (!target.searchParams.get("api_key")) {
-      return json({ error: "no api key" }, 400);
-    }
-    const res = await fetch(target.toString(), {
-      cf: { cacheTtl: 300, cacheEverything: true },
-    });
-    return new Response(res.body, {
-      status: res.status,
-      headers: {
-        ...CORS,
-        "content-type": "application/json; charset=utf-8",
-        "cache-control": "public, max-age=60",
-      },
-    });
-  } catch (e) {
-    return json({ error: "tmdb unreachable" }, 502);
-  }
-}
 
 // ------------------------------------------------------------------ analytics
 
@@ -1159,46 +1097,9 @@ async function verifyCommunityUser(request, env) {
 
 let communityMigrated = false;
 
-// A Watch Together room as the app wants it: movie, who was invited, who
-// accepted, and a ready-made list of seats (name + photo + state).
-async function watchRoomFull(env, row) {
-  const parse = (t) => { try { const v = JSON.parse(t || "[]"); return Array.isArray(v) ? v : []; } catch (_) { return []; } };
-  const invitees = parse(row.invitees_json);
-  const accepted = parse(row.accepted_json);
-  const declined = parse(row.declined_json);
-  const emails = [row.host_email, ...invitees];
-  const found = await env.DB.prepare(`SELECT email,name,photo_url AS photoUrl FROM community_profiles WHERE email IN (${emails.map(() => "?").join(",")})`).bind(...emails).all();
-  const info = {};
-  for (const r of found.results || []) info[r.email] = r;
-  const who = (e) => ({ email: e, name: (info[e] && info[e].name) || e.split("@")[0], photoUrl: (info[e] && info[e].photoUrl) || "" });
-  let movie = {};
-  try { movie = JSON.parse(row.movie_json); } catch (_) {}
-  return {
-    id: row.id,
-    hostEmail: row.host_email,
-    hostName: who(row.host_email).name,
-    movie,
-    invitees, accepted, declined,
-    status: row.status,
-    createdAt: row.created_at,
-    people: [
-      { ...who(row.host_email), role: "host", state: "host" },
-      ...invitees.map((e) => ({ ...who(e), role: "guest", state: accepted.includes(e) ? "accepted" : declined.includes(e) ? "declined" : "pending" })),
-    ],
-  };
-}
-
-function watchMember(row, email) {
-  let invitees = [], accepted = [];
-  try { invitees = JSON.parse(row.invitees_json || "[]"); } catch (_) {}
-  try { accepted = JSON.parse(row.accepted_json || "[]"); } catch (_) {}
-  return { host: row.host_email === email, invited: invitees.includes(email), accepted: accepted.includes(email) };
-}
-
 async function ensureCommunitySchema(env) {
   await env.DB.batch([
     env.DB.prepare("CREATE TABLE IF NOT EXISTS community_profiles (email TEXT PRIMARY KEY, name TEXT NOT NULL, photo_url TEXT, bio TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)"),
-    env.DB.prepare("CREATE TABLE IF NOT EXISTS community_profile_data (email TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at INTEGER NOT NULL)"),
     env.DB.prepare("CREATE TABLE IF NOT EXISTS community_posts (id TEXT PRIMARY KEY, email TEXT NOT NULL, text TEXT NOT NULL, movie_title TEXT, movie_image TEXT, rating INTEGER, created_at INTEGER NOT NULL)"),
     env.DB.prepare("CREATE INDEX IF NOT EXISTS community_posts_created ON community_posts(created_at DESC)"),
     env.DB.prepare("CREATE TABLE IF NOT EXISTS community_likes (post_id TEXT NOT NULL, email TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(post_id, email))"),
@@ -1207,8 +1108,6 @@ async function ensureCommunitySchema(env) {
     env.DB.prepare("CREATE TABLE IF NOT EXISTS community_keys (email TEXT PRIMARY KEY, key_hash TEXT NOT NULL, created_at INTEGER NOT NULL)"),
     env.DB.prepare("CREATE TABLE IF NOT EXISTS watch_rooms (id TEXT PRIMARY KEY, host_email TEXT NOT NULL, movie_json TEXT NOT NULL, invitees_json TEXT NOT NULL, accepted_json TEXT NOT NULL DEFAULT '[]', declined_json TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'open', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)"),
     env.DB.prepare("CREATE INDEX IF NOT EXISTS watch_rooms_host ON watch_rooms(host_email, created_at DESC)"),
-    env.DB.prepare("CREATE TABLE IF NOT EXISTS watch_events (seq INTEGER PRIMARY KEY AUTOINCREMENT, room_id TEXT NOT NULL, email TEXT NOT NULL, kind TEXT NOT NULL, text TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL)"),
-    env.DB.prepare("CREATE INDEX IF NOT EXISTS watch_events_room ON watch_events(room_id, seq)"),
   ]);
   if (communityMigrated) return;
   // Columns added later: tweet / recommendation, and which title it is about.
@@ -1391,7 +1290,7 @@ async function community(request, env, url) {
       return json({ ok: true });
     }
 
-    // Watch Together: theatre rooms, invitations, chat and a shared start.
+    // Watch Together: room creation, invitations, acceptance and room lookup.
     if (path === "/community/watch/rooms" && !get) {
       const body = await request.json().catch(() => ({}));
       const movie = body.movie && typeof body.movie === "object" ? body.movie : null;
@@ -1408,85 +1307,35 @@ async function community(request, env, url) {
       const stamp = Math.floor(Date.now() / 1000);
       await env.DB.prepare("INSERT INTO watch_rooms (id,host_email,movie_json,invitees_json,accepted_json,declined_json,status,created_at,updated_at) VALUES (?,?,?,?,?,?, 'open',?,?)")
         .bind(id, user.email, JSON.stringify({title, url: movieUrl, image: String(movie.image || "").slice(0, 1000), tmdbId: movie.tmdbId || null, type: movie.type === "tv" ? "tv" : "movie"}), JSON.stringify(finalInvitees), "[]", "[]", stamp, stamp).run();
-      const row = await env.DB.prepare("SELECT * FROM watch_rooms WHERE id=?").bind(id).first();
-      return json({ ok: true, room: await watchRoomFull(env, row) });
+      return json({ ok: true, room: { id, hostEmail: user.email, hostName: user.name, movie: {title, url: movieUrl, image: String(movie.image || ""), tmdbId: movie.tmdbId || null, type: movie.type === "tv" ? "tv" : "movie"}, invitees: finalInvitees, accepted: [], declined: [], status: "open", createdAt: stamp } });
     }
-    // Rooms that are still open (last 24 hours) and that invite this person.
     if (path === "/community/watch/invitations" && get) {
-      const since = Math.floor(Date.now() / 1000) - 86400;
-      const rows = await env.DB.prepare("SELECT * FROM watch_rooms WHERE status IN ('open','playing') AND created_at>? ORDER BY created_at DESC LIMIT 100").bind(since).all();
-      const mine = (rows.results || []).filter(r => { const m = watchMember(r, user.email); return m.invited && !m.accepted && !(r.declined_json || "").includes(user.email); }).slice(0, 10);
-      const invitations = [];
-      for (const r of mine) invitations.push(await watchRoomFull(env, r));
-      return json({ ok: true, invitations });
-    }
-    // Rooms this person hosts or has joined (so they can walk back in).
-    if (path === "/community/watch/mine" && get) {
-      const since = Math.floor(Date.now() / 1000) - 86400;
-      const rows = await env.DB.prepare("SELECT * FROM watch_rooms WHERE status IN ('open','playing') AND created_at>? ORDER BY created_at DESC LIMIT 100").bind(since).all();
-      const mine = (rows.results || []).filter(r => { const m = watchMember(r, user.email); return m.host || m.accepted; }).slice(0, 10);
-      const rooms = [];
-      for (const r of mine) rooms.push(await watchRoomFull(env, r));
-      return json({ ok: true, rooms });
+      const rows = await env.DB.prepare("SELECT * FROM watch_rooms WHERE status='open' ORDER BY created_at DESC LIMIT 100").all();
+      const invitations = (rows.results || []).filter(r => { try { return JSON.parse(r.invitees_json || "[]").includes(user.email) && !JSON.parse(r.declined_json || "[]").includes(user.email); } catch (_) { return false; } }).map(r => ({ id:r.id, hostEmail:r.host_email, hostName:r.host_email.split("@")[0], movie:JSON.parse(r.movie_json), invitees:JSON.parse(r.invitees_json || "[]"), accepted:JSON.parse(r.accepted_json || "[]"), status:r.status, createdAt:r.created_at }));
+      return json({ ok:true, invitations });
     }
     if (path === "/community/watch/respond" && !get) {
       const body = await request.json().catch(() => ({}));
       const id = String(body.roomId || "").slice(0, 80);
       const row = await env.DB.prepare("SELECT * FROM watch_rooms WHERE id=?").bind(id).first();
-      if (!row) return json({ error: "watch_room_not_found" }, 404);
-      const m = watchMember(row, user.email);
-      if (!m.invited && !m.host) return json({ error: "forbidden" }, 403);
+      if (!row) return json({ error:"watch_room_not_found" }, 404);
+      const invitees = JSON.parse(row.invitees_json || "[]");
+      if (!invitees.includes(user.email) && row.host_email !== user.email) return json({ error:"forbidden" }, 403);
       const accepted = JSON.parse(row.accepted_json || "[]").filter(e => e !== user.email);
       const declined = JSON.parse(row.declined_json || "[]").filter(e => e !== user.email);
       if (body.accept === true) accepted.push(user.email); else declined.push(user.email);
       const stamp = Math.floor(Date.now() / 1000);
       await env.DB.prepare("UPDATE watch_rooms SET accepted_json=?,declined_json=?,updated_at=? WHERE id=?").bind(JSON.stringify(accepted), JSON.stringify(declined), stamp, id).run();
-      const fresh = await env.DB.prepare("SELECT * FROM watch_rooms WHERE id=?").bind(id).first();
-      return json({ ok: true, room: await watchRoomFull(env, fresh) });
+      return json({ ok:true, room:{ id, hostEmail:row.host_email, movie:JSON.parse(row.movie_json), invitees, accepted, declined, status:row.status, createdAt:row.created_at } });
     }
     if (path === "/community/watch/room" && get) {
       const id = String(url.searchParams.get("id") || "").slice(0, 80);
       const row = await env.DB.prepare("SELECT * FROM watch_rooms WHERE id=?").bind(id).first();
-      if (!row) return json({ error: "watch_room_not_found" }, 404);
-      const m = watchMember(row, user.email);
-      if (!m.host && !m.invited) return json({ error: "forbidden" }, 403);
-      return json({ ok: true, room: await watchRoomFull(env, row) });
-    }
-    // POST /community/watch/event {roomId, kind: msg|react|start, text}
-    if (path === "/community/watch/event" && !get) {
-      const body = await request.json().catch(() => ({}));
-      const id = String(body.roomId || "").slice(0, 80);
-      const row = await env.DB.prepare("SELECT * FROM watch_rooms WHERE id=?").bind(id).first();
-      if (!row) return json({ error: "watch_room_not_found" }, 404);
-      const m = watchMember(row, user.email);
-      if (!m.host && !m.accepted) return json({ error: "forbidden" }, 403);
-      const kind = ["msg", "react", "start"].includes(body.kind) ? body.kind : "";
-      if (!kind) return json({ error: "bad_kind" }, 400);
-      if (kind === "start" && !m.host) return json({ error: "forbidden" }, 403);
-      let text = String(body.text || "").trim();
-      text = kind === "react" ? text.slice(0, 8) : kind === "msg" ? text.slice(0, 300) : "";
-      if (kind !== "start" && !text) return json({ error: "empty" }, 400);
-      const stamp = Math.floor(Date.now() / 1000);
-      const recent = await env.DB.prepare("SELECT COUNT(*) AS n FROM watch_events WHERE room_id=? AND email=? AND created_at>?").bind(id, user.email, stamp - 10).first();
-      if (recent && recent.n >= 20) return json({ error: "slow_down" }, 429);
-      await env.DB.prepare("INSERT INTO watch_events (room_id,email,kind,text,created_at) VALUES (?,?,?,?,?)").bind(id, user.email, kind, text, stamp).run();
-      if (kind === "start") await env.DB.prepare("UPDATE watch_rooms SET status='playing', updated_at=? WHERE id=?").bind(stamp, id).run();
-      return json({ ok: true });
-    }
-    // GET /community/watch/events?roomId=&since=<seq>
-    if (path === "/community/watch/events" && get) {
-      const id = String(url.searchParams.get("roomId") || "").slice(0, 80);
-      const since = Math.max(0, parseInt(url.searchParams.get("since") || "0", 10) || 0);
-      const row = await env.DB.prepare("SELECT * FROM watch_rooms WHERE id=?").bind(id).first();
-      if (!row) return json({ error: "watch_room_not_found" }, 404);
-      const m = watchMember(row, user.email);
-      if (!m.host && !m.invited) return json({ error: "forbidden" }, 403);
-      const sel = "SELECT e.seq,e.email,e.kind,e.text,e.created_at AS createdAt, COALESCE(pr.name, e.email) AS name FROM watch_events e LEFT JOIN community_profiles pr ON pr.email=e.email WHERE e.room_id=?1 ";
-      let rows;
-      if (since > 0) rows = (await env.DB.prepare(sel + "AND e.seq>?2 ORDER BY e.seq ASC LIMIT 100").bind(id, since).all()).results || [];
-      else rows = ((await env.DB.prepare(sel + "AND e.kind!='react' ORDER BY e.seq DESC LIMIT 60").bind(id).all()).results || []).reverse();
-      const start = await env.DB.prepare("SELECT created_at AS at FROM watch_events WHERE room_id=? AND kind='start' ORDER BY seq DESC LIMIT 1").bind(id).first();
-      return json({ ok: true, events: rows, startedAt: start ? start.at : null, now: Math.floor(Date.now() / 1000) });
+      if (!row) return json({ error:"watch_room_not_found" }, 404);
+      const invitees = JSON.parse(row.invitees_json || "[]");
+      if (row.host_email !== user.email && !invitees.includes(user.email)) return json({ error:"forbidden" }, 403);
+      const host = await env.DB.prepare("SELECT name FROM community_profiles WHERE email=?").bind(row.host_email).first();
+      return json({ ok:true, room:{ id, hostEmail:row.host_email, hostName:host && host.name || row.host_email.split("@")[0], movie:JSON.parse(row.movie_json), invitees, accepted:JSON.parse(row.accepted_json || "[]"), declined:JSON.parse(row.declined_json || "[]"), status:row.status, createdAt:row.created_at } });
     }
 
     // GET /community/people
@@ -1525,28 +1374,6 @@ async function community(request, env, url) {
         },
       });
     }
-
-    // POST /community/profile/data {data}  -> saves the caller's public profile
-    // snapshot (ratings, lists, interests...) so other members can open it.
-    if (path === "/community/profile/data" && !get) {
-      const body = await request.json().catch(() => ({}));
-      const data = body && typeof body.data === "object" && body.data ? body.data : {};
-      const raw = JSON.stringify(data);
-      if (raw.length > 400000) return json({ error: "too_large" }, 413);
-      await env.DB.prepare("INSERT INTO community_profile_data (email,data,updated_at) VALUES (?,?,?) ON CONFLICT(email) DO UPDATE SET data=excluded.data, updated_at=excluded.updated_at").bind(user.email, raw, now).run();
-      return json({ ok: true });
-    }
-
-    // GET /community/profile/data?email=  -> that member's snapshot (or null)
-    if (path === "/community/profile/data" && get) {
-      const email = cleanGmail(url.searchParams.get("email"));
-      if (!email) return json({ error: "valid_gmail_required" }, 400);
-      const row = await env.DB.prepare("SELECT data FROM community_profile_data WHERE email=?").bind(email).first();
-      let data = null;
-      try { data = row ? JSON.parse(row.data) : null; } catch (_) {}
-      return json({ ok: true, data });
-    }
-
     return json({ error: "not found" }, 404);
   } catch (e) {
     console.error("community error", e && e.message);
