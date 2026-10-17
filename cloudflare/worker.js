@@ -1106,6 +1106,8 @@ async function ensureCommunitySchema(env) {
     env.DB.prepare("CREATE TABLE IF NOT EXISTS community_comments (id TEXT PRIMARY KEY, post_id TEXT NOT NULL, email TEXT NOT NULL, text TEXT NOT NULL, created_at INTEGER NOT NULL)"),
     env.DB.prepare("CREATE INDEX IF NOT EXISTS community_comments_post ON community_comments(post_id, created_at ASC)"),
     env.DB.prepare("CREATE TABLE IF NOT EXISTS community_keys (email TEXT PRIMARY KEY, key_hash TEXT NOT NULL, created_at INTEGER NOT NULL)"),
+    env.DB.prepare("CREATE TABLE IF NOT EXISTS watch_rooms (id TEXT PRIMARY KEY, host_email TEXT NOT NULL, movie_json TEXT NOT NULL, invitees_json TEXT NOT NULL, accepted_json TEXT NOT NULL DEFAULT '[]', declined_json TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'open', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)"),
+    env.DB.prepare("CREATE INDEX IF NOT EXISTS watch_rooms_host ON watch_rooms(host_email, created_at DESC)"),
   ]);
   if (communityMigrated) return;
   // Columns added later: tweet / recommendation, and which title it is about.
@@ -1286,6 +1288,54 @@ async function community(request, env, url) {
       if (!row || (row.email !== user.email && row.postEmail !== user.email)) return json({ error: "comment_not_found" }, 404);
       await env.DB.prepare("DELETE FROM community_comments WHERE id=?").bind(id).run();
       return json({ ok: true });
+    }
+
+    // Watch Together: room creation, invitations, acceptance and room lookup.
+    if (path === "/community/watch/rooms" && !get) {
+      const body = await request.json().catch(() => ({}));
+      const movie = body.movie && typeof body.movie === "object" ? body.movie : null;
+      const title = String(movie && movie.title || "").trim().slice(0, 180);
+      const movieUrl = String(movie && movie.url || "");
+      if (!title || !/^https:\/\//i.test(movieUrl)) return json({ error: "watch_movie_required" }, 400);
+      const invitees = [...new Set((Array.isArray(body.invitees) ? body.invitees : []).map(cleanGmail).filter(e => e && e !== user.email))].slice(0, 20);
+      if (!invitees.length) return json({ error: "watch_invitees_required" }, 400);
+      const valid = await env.DB.prepare(`SELECT email FROM community_profiles WHERE email IN (${invitees.map(() => "?").join(",")})`).bind(...invitees).all();
+      const registered = new Set((valid.results || []).map(r => r.email));
+      const finalInvitees = invitees.filter(e => registered.has(e));
+      if (!finalInvitees.length) return json({ error: "watch_users_not_found" }, 400);
+      const id = communityId();
+      const stamp = Math.floor(Date.now() / 1000);
+      await env.DB.prepare("INSERT INTO watch_rooms (id,host_email,movie_json,invitees_json,accepted_json,declined_json,status,created_at,updated_at) VALUES (?,?,?,?,?,?, 'open',?,?)")
+        .bind(id, user.email, JSON.stringify({title, url: movieUrl, image: String(movie.image || "").slice(0, 1000), tmdbId: movie.tmdbId || null, type: movie.type === "tv" ? "tv" : "movie"}), JSON.stringify(finalInvitees), "[]", "[]", stamp, stamp).run();
+      return json({ ok: true, room: { id, hostEmail: user.email, hostName: user.name, movie: {title, url: movieUrl, image: String(movie.image || ""), tmdbId: movie.tmdbId || null, type: movie.type === "tv" ? "tv" : "movie"}, invitees: finalInvitees, accepted: [], declined: [], status: "open", createdAt: stamp } });
+    }
+    if (path === "/community/watch/invitations" && get) {
+      const rows = await env.DB.prepare("SELECT * FROM watch_rooms WHERE status='open' ORDER BY created_at DESC LIMIT 100").all();
+      const invitations = (rows.results || []).filter(r => { try { return JSON.parse(r.invitees_json || "[]").includes(user.email) && !JSON.parse(r.declined_json || "[]").includes(user.email); } catch (_) { return false; } }).map(r => ({ id:r.id, hostEmail:r.host_email, hostName:r.host_email.split("@")[0], movie:JSON.parse(r.movie_json), invitees:JSON.parse(r.invitees_json || "[]"), accepted:JSON.parse(r.accepted_json || "[]"), status:r.status, createdAt:r.created_at }));
+      return json({ ok:true, invitations });
+    }
+    if (path === "/community/watch/respond" && !get) {
+      const body = await request.json().catch(() => ({}));
+      const id = String(body.roomId || "").slice(0, 80);
+      const row = await env.DB.prepare("SELECT * FROM watch_rooms WHERE id=?").bind(id).first();
+      if (!row) return json({ error:"watch_room_not_found" }, 404);
+      const invitees = JSON.parse(row.invitees_json || "[]");
+      if (!invitees.includes(user.email) && row.host_email !== user.email) return json({ error:"forbidden" }, 403);
+      const accepted = JSON.parse(row.accepted_json || "[]").filter(e => e !== user.email);
+      const declined = JSON.parse(row.declined_json || "[]").filter(e => e !== user.email);
+      if (body.accept === true) accepted.push(user.email); else declined.push(user.email);
+      const stamp = Math.floor(Date.now() / 1000);
+      await env.DB.prepare("UPDATE watch_rooms SET accepted_json=?,declined_json=?,updated_at=? WHERE id=?").bind(JSON.stringify(accepted), JSON.stringify(declined), stamp, id).run();
+      return json({ ok:true, room:{ id, hostEmail:row.host_email, movie:JSON.parse(row.movie_json), invitees, accepted, declined, status:row.status, createdAt:row.created_at } });
+    }
+    if (path === "/community/watch/room" && get) {
+      const id = String(url.searchParams.get("id") || "").slice(0, 80);
+      const row = await env.DB.prepare("SELECT * FROM watch_rooms WHERE id=?").bind(id).first();
+      if (!row) return json({ error:"watch_room_not_found" }, 404);
+      const invitees = JSON.parse(row.invitees_json || "[]");
+      if (row.host_email !== user.email && !invitees.includes(user.email)) return json({ error:"forbidden" }, 403);
+      const host = await env.DB.prepare("SELECT name FROM community_profiles WHERE email=?").bind(row.host_email).first();
+      return json({ ok:true, room:{ id, hostEmail:row.host_email, hostName:host && host.name || row.host_email.split("@")[0], movie:JSON.parse(row.movie_json), invitees, accepted:JSON.parse(row.accepted_json || "[]"), declined:JSON.parse(row.declined_json || "[]"), status:row.status, createdAt:row.created_at } });
     }
 
     // GET /community/people
