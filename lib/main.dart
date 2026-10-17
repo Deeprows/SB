@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'app.dart';
 import 'services/analytics_service.dart';
 import 'services/auth_service.dart';
+import 'services/profile_sync.dart';
 import 'services/download_manager.dart';
 import 'services/locale_service.dart';
 import 'services/remote_config.dart';
@@ -39,6 +40,10 @@ Future<void> main() async {
   await DownloadManager.instance.init();
 
   runApp(const DamiMoviesApp());
+
+  // Keeps this person's profile copy on the server up to date, so other
+  // members can open it from the community.
+  ProfileSync.instance.start();
 
   // Analytics never blocks app startup.
   unawaited(
