@@ -9,6 +9,7 @@ import 'package:webview_flutter_android/webview_flutter_android.dart';
 import '../config.dart';
 import '../services/ad_shield.dart';
 import '../services/download_manager.dart';
+import '../services/download_notifier.dart';
 import '../services/subscription_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/download_notice.dart';
@@ -225,7 +226,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
   Future<void> _checkNavigation(String url, {required bool crossSite}) async {
     if (!_checked.add(url)) return;
     Future<void>.delayed(const Duration(seconds: 6), () => _checked.remove(url));
-    final cookie = await _pageCookies();
+    final cookie = await _pageCookies(url);
     final isFile = await DownloadManager.instance
         .looksLikeFile(url, referer: _url, cookie: cookie);
     if (!mounted) return;
@@ -359,15 +360,26 @@ return JSON.stringify(out.slice(0,12));})()''';
   String get _host => Uri.tryParse(_url)?.host ?? '';
   bool get _secure => _url.startsWith('https://');
 
-  /// Best effort: cookies the page can see (HttpOnly cookies are not
-  /// readable), so hosts that check a session still accept the request.
-  Future<String> _pageCookies() async {
+  /// Cookies for the request: what the page can see plus everything the
+  /// WebView stores for the file address and the page (HttpOnly included),
+  /// so hosts that check a session don't answer 403.
+  Future<String> _pageCookies([String? forUrl]) async {
+    final parts = <String, String>{};
+    void add(String raw) {
+      for (final c in raw.split(';')) {
+        final i = c.indexOf('=');
+        if (i <= 0) continue;
+        parts[c.substring(0, i).trim()] = c.substring(i + 1).trim();
+      }
+    }
+
     try {
       final r = await _wc.runJavaScriptReturningResult('document.cookie');
-      return r.toString().replaceAll(RegExp(r'^"|"$'), '');
-    } catch (_) {
-      return '';
-    }
+      add(r.toString().replaceAll(RegExp(r'^"|"$'), ''));
+    } catch (_) {}
+    add(await DownloadNotifier.cookiesFor(_url));
+    if (forUrl != null) add(await DownloadNotifier.cookiesFor(forUrl));
+    return parts.entries.map((e) => '${e.key}=${e.value}').join('; ');
   }
 
   Future<void> _startDownload(String url) async {
@@ -378,7 +390,7 @@ return JSON.stringify(out.slice(0,12));})()''';
         content: Text('Starting download…'),
         duration: Duration(seconds: 30),
       ));
-    final cookie = await _pageCookies();
+    final cookie = await _pageCookies(url);
     // Wait for the real result: the link is checked first and may turn out
     // not to be a file (or the server may refuse it).
     final error = await DownloadManager.instance.enqueue(
