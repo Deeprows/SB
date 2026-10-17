@@ -4,8 +4,6 @@ import 'package:flutter/services.dart';
 
 import '../screens/community_post_screen.dart';
 import '../screens/community_profile_screen.dart';
-import '../screens/profile_screen.dart' show MemberProfileScreen;
-import '../services/auth_service.dart';
 import '../services/community_service.dart';
 import '../services/support_gate.dart';
 import '../theme/app_theme.dart';
@@ -52,18 +50,12 @@ Future<bool> communityTry(BuildContext context, Future<void> Function() job) asy
   return false;
 }
 
-/// Opens a member's profile: the full profile (ratings, lists, interests...)
-/// for other people, and the posts page for your own account (the "My
-/// community posts" row).
 void openCommunityProfile(BuildContext context, String email,
     {String? name, String? photoUrl}) {
   if (email.isEmpty) return;
-  final me = AuthService.instance.user?.email.trim().toLowerCase();
-  final mine = me != null && me == email.trim().toLowerCase();
   Navigator.of(context).push(MaterialPageRoute<void>(
-    builder: (_) => mine
-        ? CommunityProfileScreen(email: email, name: name, photoUrl: photoUrl)
-        : MemberProfileScreen(email: email, name: name, photoUrl: photoUrl),
+    builder: (_) =>
+        CommunityProfileScreen(email: email, name: name, photoUrl: photoUrl),
   ));
 }
 
