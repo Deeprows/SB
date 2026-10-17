@@ -1100,6 +1100,7 @@ let communityMigrated = false;
 async function ensureCommunitySchema(env) {
   await env.DB.batch([
     env.DB.prepare("CREATE TABLE IF NOT EXISTS community_profiles (email TEXT PRIMARY KEY, name TEXT NOT NULL, photo_url TEXT, bio TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)"),
+    env.DB.prepare("CREATE TABLE IF NOT EXISTS community_profile_data (email TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at INTEGER NOT NULL)"),
     env.DB.prepare("CREATE TABLE IF NOT EXISTS community_posts (id TEXT PRIMARY KEY, email TEXT NOT NULL, text TEXT NOT NULL, movie_title TEXT, movie_image TEXT, rating INTEGER, created_at INTEGER NOT NULL)"),
     env.DB.prepare("CREATE INDEX IF NOT EXISTS community_posts_created ON community_posts(created_at DESC)"),
     env.DB.prepare("CREATE TABLE IF NOT EXISTS community_likes (post_id TEXT NOT NULL, email TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(post_id, email))"),
@@ -1374,6 +1375,28 @@ async function community(request, env, url) {
         },
       });
     }
+
+    // POST /community/profile/data {data}  -> saves the caller's public profile
+    // snapshot (ratings, lists, interests...) so other members can open it.
+    if (path === "/community/profile/data" && !get) {
+      const body = await request.json().catch(() => ({}));
+      const data = body && typeof body.data === "object" && body.data ? body.data : {};
+      const raw = JSON.stringify(data);
+      if (raw.length > 400000) return json({ error: "too_large" }, 413);
+      await env.DB.prepare("INSERT INTO community_profile_data (email,data,updated_at) VALUES (?,?,?) ON CONFLICT(email) DO UPDATE SET data=excluded.data, updated_at=excluded.updated_at").bind(user.email, raw, now).run();
+      return json({ ok: true });
+    }
+
+    // GET /community/profile/data?email=  -> that member's snapshot (or null)
+    if (path === "/community/profile/data" && get) {
+      const email = cleanGmail(url.searchParams.get("email"));
+      if (!email) return json({ error: "valid_gmail_required" }, 400);
+      const row = await env.DB.prepare("SELECT data FROM community_profile_data WHERE email=?").bind(email).first();
+      let data = null;
+      try { data = row ? JSON.parse(row.data) : null; } catch (_) {}
+      return json({ ok: true, data });
+    }
+
     return json({ error: "not found" }, 404);
   } catch (e) {
     console.error("community error", e && e.message);
