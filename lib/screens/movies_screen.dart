@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:ui' show ImageFilter;
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show rootBundle;
 
 import '../config.dart';
 import '../models/movie.dart';
@@ -91,8 +93,9 @@ class _MoviesScreenState extends State<MoviesScreen> {
     _load().then((_) {
       if (AppConfig.moviesUrl.isNotEmpty) _load(remote: true);
     });
-    _loadTrending();
-    _loadPopular();
+    // One after the other: on a slow connection Trending / Top 10 arrive
+    // first instead of fighting the other lists for the same bandwidth.
+    _loadTrending().whenComplete(_loadPopular);
     ContentSync.tick.addListener(_onSync);
     AppLocale.notifier.addListener(_onLanguage);
     MovieLibrary.instance
@@ -165,11 +168,47 @@ class _MoviesScreenState extends State<MoviesScreen> {
     super.dispose();
   }
 
+  String? _loadError;
+
+  /// The list shipped inside the app, read straight from the asset with no
+  /// TMDB or network step, so the home always has something to show.
+  Future<List<Movie>> _bundledList() async {
+    final d = jsonDecode(await rootBundle.loadString('assets/data/movies.json'));
+    final seen = <String>{};
+    final out = <Movie>[];
+    if (d is List) {
+      for (final r in d) {
+        final m = Movie.tryParse(r);
+        if (m != null && seen.add(m.url)) out.add(m);
+      }
+    }
+    return out;
+  }
+
   Future<void> _load({bool remote = false}) async {
-    final list = await feed.loadMovies(remote: remote);
+    List<Movie>? list;
+    String? error;
+    try {
+      // Never let the home spinner run for ever: a slow or failing load is
+      // given up on and the rows that are ready (TMDB lists) are shown.
+      list = await feed
+          .loadMovies(remote: remote)
+          .timeout(Duration(seconds: remote ? 60 : 20));
+    } catch (e) {
+      error = '$e';
+      debugPrint('Home list could not be loaded: $e');
+    }
+    if ((list == null || list.isEmpty) && _all.isEmpty) {
+      try {
+        list = await _bundledList();
+      } catch (e) {
+        error = '${error ?? ''} / $e';
+      }
+    }
     if (!mounted) return;
     setState(() {
-      _all = list;
+      if (list != null && list.isNotEmpty) _all = list;
+      _loadError = _all.isEmpty ? (error ?? 'The movie list is empty.') : null;
       _loading = false;
     });
     _fetchHomeRows();
@@ -599,6 +638,40 @@ class _MoviesScreenState extends State<MoviesScreen> {
             padding: const EdgeInsets.only(top: 8, bottom: 28),
             child: Column(
               children: [
+                if (_all.isEmpty && _trending.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+                    child: Column(
+                      children: [
+                        Icon(Icons.movie_filter_rounded,
+                            size: 40, color: Ui.muted),
+                        const SizedBox(height: 10),
+                        Text(
+                            'Movies could not be loaded. Check your connection and try again.'
+                                .tr,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: Ui.muted)),
+                        if (_loadError != null) ...[
+                          const SizedBox(height: 6),
+                          Text(_loadError!,
+                              maxLines: 3,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.center,
+                              style: TextStyle(color: Ui.dim, fontSize: 11)),
+                        ],
+                        const SizedBox(height: 12),
+                        OutlinedButton.icon(
+                          onPressed: () {
+                            setState(() => _loading = true);
+                            _load().then((_) => _loadTrending());
+                            _loadPopular();
+                          },
+                          icon: const Icon(Icons.refresh_rounded),
+                          label: Text('Retry'.tr),
+                        ),
+                      ],
+                    ),
+                  ),
                 for (final r in rows)
                   Padding(
                       key: r.key,
@@ -819,17 +892,17 @@ class _MoviesScreenState extends State<MoviesScreen> {
       ..sort((a, b) => b.date!.compareTo(a.date!));
 
     add('Continue Watching'.tr, lib.history.map((e) => e.movie));
-    // Latest Trailers sits right under Continue Watching (or at the top when
-    // there is no Continue Watching row yet).
-    if (TmdbService.enabled) {
-      out.add(LatestTrailersRow(
-          key: const ValueKey('latest-trailers'), onOpen: _details));
-    }
     if (_trending.isNotEmpty) {
       add('Trending Now'.tr, _trending);
       add('Top 10 Today'.tr, _trending, numbered: true, max: 10, min: 5);
     } else {
       add('Popular on ${AppConfig.appName}', ranked);
+    }
+    // Latest Trailers sits right under Top 10 Today (or under the Popular
+    // row when there is no Top 10 yet).
+    if (TmdbService.enabled) {
+      out.add(LatestTrailersRow(
+          key: const ValueKey('latest-trailers'), onOpen: _details));
     }
     add('My List'.tr, lib.watchLater);
     add('New on ${AppConfig.appName}', newest);
