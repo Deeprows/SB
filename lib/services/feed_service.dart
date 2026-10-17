@@ -71,8 +71,16 @@ class FeedService {
     // TMDB trending titles go after your own list.
     if (AppConfig.tmdbTrending && TmdbService.enabled) {
       final ids = {for (final m in sorted) if (m.tmdbId != null) m.tmdbId};
-      for (final m in await tmdb.trending(fetch: remote)) {
-        if (seen.add(m.url) && !ids.contains(m.tmdbId)) sorted.add(m);
+      try {
+        // The homepage has its own Trending Now row. Do not let a slow TMDB
+        // request prevent the bundled/cached movie catalogue from displaying.
+        final trending = await tmdb.trending(fetch: remote)
+            .timeout(const Duration(seconds: 12));
+        for (final m in trending) {
+          if (seen.add(m.url) && !ids.contains(m.tmdbId)) sorted.add(m);
+        }
+      } catch (_) {
+        // Keep the user's local/cached catalogue on screen.
       }
     }
     return sorted;
