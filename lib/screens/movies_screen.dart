@@ -953,7 +953,7 @@ class _MoviesScreenState extends State<MoviesScreen> {
                       style: TextStyle(color: Ui.dim, fontSize: 11)),
                   if (TmdbService.lastFailure.isNotEmpty)
                     Text(TmdbService.lastFailure,
-                        maxLines: 3,
+                        maxLines: 8,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(color: Ui.dim, fontSize: 11)),
                 ],
