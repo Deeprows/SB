@@ -52,7 +52,8 @@ class AppConfig {
   /// the app) plus TMDB trending / categories / search (see below). Set
   /// [moviesUrl] to a raw JSON link (same shape as movies.json) to add titles
   /// without a new APK. Empty = bundled list only.
-  static const moviesUrl = '';
+  static const moviesUrl =
+      'https://raw.githubusercontent.com/Deeprows/SB/main/assets/data/movies.json';
 
   /// Cloudflare feed (traffic monitoring). When set, a remote movies list
   /// is downloaded from `<feedBase>/feed/movies.json`
