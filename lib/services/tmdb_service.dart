@@ -249,7 +249,7 @@ class TmdbService {
     final tv = m.isSeries;
     final key = '${tv ? 'tv' : 'movie'}:$id';
 
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await _Store.open();
     Map<String, dynamic> cache = {};
     try {
       final c = prefs.getString(_postersKey);
@@ -285,7 +285,7 @@ class TmdbService {
   /// [fetch] is false (or the request fails).
   Future<Movie?> details(int id, {required bool tv, bool fetch = true}) async {
     final key = '${tv ? 'tv' : 'movie'}:$id';
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await _Store.open();
     Map<String, dynamic> cache = {};
     try {
       final c = prefs.getString(_detailsKey);
@@ -308,7 +308,7 @@ class TmdbService {
   /// than 15 minutes is reused (the app syncs every minute); [force] always
   /// asks TMDB (pull to refresh, new day, new language).
   Future<List<Movie>> trending({bool fetch = true, bool force = false}) async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await _Store.open();
     if (fetch) {
       final at = prefs.getInt(_trendingAtKey) ?? 0;
       final age = DateTime.now().millisecondsSinceEpoch - at;
@@ -373,7 +373,7 @@ class TmdbService {
     final type = tv ? 'tv' : 'movie';
     final key = 'cache_tmdb_popular_$type';
     final atKey = '${key}_at';
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await _Store.open();
     if (fetch) {
       final age = DateTime.now().millisecondsSinceEpoch -
           (prefs.getInt(atKey) ?? 0);
@@ -716,3 +716,54 @@ class _Target {
 }
 
 final tmdb = TmdbService();
+
+/// Saved TMDB lists with a safety net: if the phone's key-value storage
+/// fails (a plugin / Android problem), the lists are still kept in memory for
+/// this session, so the home page keeps working instead of showing nothing.
+class _Store {
+  static final Map<String, Object> _mem = {};
+  final SharedPreferences? _p;
+  _Store._(this._p);
+
+  static Future<_Store> open() async {
+    try {
+      return _Store._(await SharedPreferences.getInstance());
+    } catch (_) {
+      return _Store._(null);
+    }
+  }
+
+  String? getString(String key) {
+    final v = _mem[key];
+    if (v is String) return v;
+    try {
+      return _p?.getString(key);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  int? getInt(String key) {
+    final v = _mem[key];
+    if (v is int) return v;
+    try {
+      return _p?.getInt(key);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> setString(String key, String value) async {
+    _mem[key] = value;
+    try {
+      await _p?.setString(key, value);
+    } catch (_) {}
+  }
+
+  Future<void> setInt(String key, int value) async {
+    _mem[key] = value;
+    try {
+      await _p?.setInt(key, value);
+    } catch (_) {}
+  }
+}
