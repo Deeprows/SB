@@ -130,11 +130,16 @@ class TmdbService {
           final data = jsonDecode(utf8.decode(res.bodyBytes));
           // A real TMDB answer is a JSON object ({results: [...]} or a
           // title's details). Anything else is not from the proxy.
-          if (data is Map && !data.containsKey('error')) {
+          if (data is Map &&
+              !data.containsKey('error') &&
+              (data.containsKey('results') || data.containsKey('id'))) {
             lastNote = '';
             return data;
           }
           notes.add('Worker sent an unexpected answer');
+          // Not TMDB's data (an old or misconfigured Worker): skip it for a
+          // while and ask TMDB directly below.
+          _workerSkipUntil = DateTime.now().add(const Duration(minutes: 5));
         } else {
           notes.add('Worker HTTP ${res.statusCode}');
           if (res.statusCode >= 500) {
@@ -166,7 +171,8 @@ class TmdbService {
           lastNote = '';
           return jsonDecode(utf8.decode(res.bodyBytes));
         }
-        notes.add('TMDB HTTP ${res.statusCode}');
+        notes.add('TMDB HTTP ${res.statusCode}'
+            '${res.statusCode == 401 ? ' (API key rejected)' : ''}');
         if (res.statusCode >= 400 && res.statusCode < 500) break;
       } catch (e) {
         notes.add('TMDB: ${e.toString().split('\n').first}');
@@ -306,7 +312,9 @@ class TmdbService {
     if (fetch) {
       final at = prefs.getInt(_trendingAtKey) ?? 0;
       final age = DateTime.now().millisecondsSinceEpoch - at;
-      final fresh = prefs.getString(_trendingKey) != null &&
+      // A saved copy only counts as fresh when it holds titles we can show.
+      final fresh = _parseSaved(prefs.getString(_trendingKey), 'movie')
+              .isNotEmpty &&
           age >= 0 &&
           age < const Duration(minutes: 15).inMilliseconds;
       if (force || !fresh) {
@@ -315,7 +323,15 @@ class TmdbService {
         final all = <dynamic>[];
         for (final page in const ['1', '2']) {
           final p = await _get('/trending/all/day', {'page': page});
-          if (p is Map && p['results'] is List) all.addAll(p['results'] as List);
+          if (p is Map && p['results'] is List) {
+            all.addAll(p['results'] as List);
+          } else if (p == null) {
+            lastFailure = lastNote.isEmpty
+                ? 'Trending: no answer from TMDB'
+                : lastNote;
+          } else {
+            lastFailure = 'Trending: unexpected answer from TMDB';
+          }
           if (all.isEmpty) break; // no connection to TMDB: stop early
           await prefs.setString(_trendingKey, jsonEncode(all));
           await prefs.setInt(
@@ -335,6 +351,20 @@ class TmdbService {
     }
   }
 
+  /// Titles inside a saved TMDB list (empty when there is none or it cannot
+  /// be read).
+  List<Movie> _parseSaved(String? raw, String type) {
+    if (raw == null) return const [];
+    try {
+      return (jsonDecode(raw) as List)
+          .map((e) => fromJson(e, type: type))
+          .whereType<Movie>()
+          .toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
   /// TMDB's live "popular" list: movies ([tv] false) or series ([tv] true),
   /// about 40 titles from `/movie/popular` or `/tv/popular`. Same saving and
   /// 15 minute reuse as [trending]; [force] always asks TMDB.
@@ -347,7 +377,7 @@ class TmdbService {
     if (fetch) {
       final age = DateTime.now().millisecondsSinceEpoch -
           (prefs.getInt(atKey) ?? 0);
-      final fresh = prefs.getString(key) != null &&
+      final fresh = _parseSaved(prefs.getString(key), type).isNotEmpty &&
           age >= 0 &&
           age < const Duration(minutes: 15).inMilliseconds;
       if (force || !fresh) {
@@ -358,6 +388,9 @@ class TmdbService {
         final all = <dynamic>[];
         for (final p in pages) {
           if (p is Map && p['results'] is List) all.addAll(p['results'] as List);
+        }
+        if (all.isEmpty && lastFailure.isEmpty) {
+          lastFailure = 'Popular $type: no results from TMDB';
         }
         if (all.isNotEmpty) {
           await prefs.setString(key, jsonEncode(all));
