@@ -41,7 +41,7 @@ class AppConfig {
   /// your GitHub repo (see NOTICE.md). Shown in the menu's "Notice" item and,
   /// when the file says "popup": true, once when the app opens.
   /// Empty = only the bundled assets/data/notice.json is used.
-  static const noticeUrl = '';
+  static const noticeUrl = 'https://raw.githubusercontent.com/Deeprows/SB/refs/heads/main/assets/data/notice.json';
 
   /// Origin used as the base URL of the built-in HLS / MP4 / DASH player page.
   /// Some stream hosts only allow requests coming from your own site, so this
