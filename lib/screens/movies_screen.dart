@@ -266,7 +266,9 @@ class _MoviesScreenState extends State<MoviesScreen> {
           if (ft.isNotEmpty) _popTv = ft;
         });
       }
-    } catch (_) {}
+    } catch (e) {
+      TmdbService.lastFailure = 'Popular error: $e';
+    }
   }
 
   /// Fills the home category rows (the first six categories) with TMDB's
@@ -296,7 +298,9 @@ class _MoviesScreenState extends State<MoviesScreen> {
       if (mounted && cached.isNotEmpty) setState(() => _trending = cached);
       final fresh = await tmdb.trending(force: force);
       if (mounted && fresh.isNotEmpty) setState(() => _trending = fresh);
-    } catch (_) {}
+    } catch (e) {
+      TmdbService.lastFailure = 'Trending error: $e';
+    }
   }
 
   /// Searches the whole TMDB catalogue shortly after typing stops.
@@ -943,6 +947,10 @@ class _MoviesScreenState extends State<MoviesScreen> {
                 children: [
                   Text('Live movie lists could not load.'.tr,
                       style: const TextStyle(fontWeight: FontWeight.w800)),
+                  Text(
+                      'trending ${_trending.length} · popular '
+                      '${_popMovies.length}/${_popTv.length}',
+                      style: TextStyle(color: Ui.dim, fontSize: 11)),
                   if (TmdbService.lastFailure.isNotEmpty)
                     Text(TmdbService.lastFailure,
                         maxLines: 3,
