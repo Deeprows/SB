@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show ValueNotifier;
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -58,12 +60,59 @@ class TmdbService {
   /// home screen when the live lists are missing).
   static String lastNote = '';
 
+  /// Why the last request failed. Unlike [lastNote] a later success does not
+  /// wipe it, so the home page can still say what went wrong.
+  static String lastFailure = '';
+
+  /// Turns true once the home page has finished its first try at TMDB's
+  /// trending / popular lists. The Latest Trailers row waits for it, so the
+  /// lists the home needs first are not slowed down by ~20 trailer lookups.
+  static final ValueNotifier<bool> homeReady = ValueNotifier<bool>(false);
+
+  // At most 4 TMDB requests at a time (a slow connection chokes on dozens),
+  // and identical requests made at the same moment share one answer.
+  static const _maxActive = 4;
+  int _active = 0;
+  final List<Completer<void>> _queue = [];
+  final Map<String, Future<dynamic>> _inflight = {};
+
+  Future<T> _limited<T>(Future<T> Function() job) async {
+    if (_active >= _maxActive) {
+      final c = Completer<void>();
+      _queue.add(c);
+      await c.future; // a finishing request hands its slot over
+    } else {
+      _active++;
+    }
+    try {
+      return await job();
+    } finally {
+      if (_queue.isNotEmpty) {
+        _queue.removeAt(0).complete();
+      } else {
+        _active--;
+      }
+    }
+  }
+
   static const _headers = {
     'User-Agent': AppConfig.userAgent,
     'Accept': 'application/json',
   };
 
-  Future<dynamic> _get(String path, [Map<String, String> query = const {}]) async {
+  Future<dynamic> _get(String path, [Map<String, String> query = const {}]) {
+    final q = query.entries.toList()..sort((a, b) => a.key.compareTo(b.key));
+    final key = '$path?${q.map((e) => '${e.key}=${e.value}').join('&')}';
+    final running = _inflight[key];
+    if (running != null) return running;
+    final f = _limited(() => _getNow(path, query))
+        .whenComplete(() => _inflight.remove(key));
+    _inflight[key] = f;
+    return f;
+  }
+
+  Future<dynamic> _getNow(String path,
+      [Map<String, String> query = const {}]) async {
     final params = <String, String>{'language': 'en-US', ...query};
     final notes = <String>[];
 
@@ -75,7 +124,8 @@ class TmdbService {
         final res = await http
             .get(Uri.parse('$base/tmdb/3$path').replace(queryParameters: params),
                 headers: _headers)
-            .timeout(const Duration(seconds: 15));
+            
+            .timeout(const Duration(seconds: 8));
         if (res.statusCode == 200) {
           final data = jsonDecode(utf8.decode(res.bodyBytes));
           // A real TMDB answer is a JSON object ({results: [...]} or a
@@ -87,6 +137,9 @@ class TmdbService {
           notes.add('Worker sent an unexpected answer');
         } else {
           notes.add('Worker HTTP ${res.statusCode}');
+          if (res.statusCode >= 500) {
+            _workerSkipUntil = DateTime.now().add(const Duration(minutes: 1));
+          }
           if ((res.statusCode == 404 || res.statusCode == 403) &&
               res.body.contains('"error"')) {
             // The Worker has no proxy route: stop asking it for a while.
@@ -95,7 +148,7 @@ class TmdbService {
         }
       } catch (e) {
         notes.add('Worker: ${e.toString().split('\n').first}');
-        _workerSkipUntil = DateTime.now().add(const Duration(minutes: 2));
+        _workerSkipUntil = DateTime.now().add(const Duration(minutes: 5));
       }
     }
 
@@ -120,6 +173,7 @@ class TmdbService {
       }
     }
     lastNote = notes.toSet().join(' · ');
+    lastFailure = lastNote;
     return null;
   }
 
