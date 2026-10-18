@@ -60,6 +60,19 @@ class _LatestTrailersRowState extends State<LatestTrailersRow> {
       _loading = true;
       _previewKey = null;
     });
+    // Let the home's trending / popular lists go first (they are what the
+    // page is built around); give up waiting after 20 seconds.
+    if (!TmdbService.homeReady.value) {
+      final ready = Completer<void>();
+      void check() {
+        if (TmdbService.homeReady.value && !ready.isCompleted) ready.complete();
+      }
+
+      TmdbService.homeReady.addListener(check);
+      await ready.future.timeout(const Duration(seconds: 20), onTimeout: () {});
+      TmdbService.homeReady.removeListener(check);
+      if (!mounted || cat != _category) return;
+    }
     final items = await tmdb.latestTrailers(cat);
     if (!mounted || cat != _category) return;
     setState(() {
