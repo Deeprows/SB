@@ -53,6 +53,8 @@ class _MoviesScreenState extends State<MoviesScreen> {
   }
   bool _homeRowsBusy = false;
   bool _loading = true;
+  bool _listsBusy = true; // TMDB trending / popular still arriving
+  Timer? _refresh;
   String _query = '';
   String? _genre;
   String? _type; // null = all, 'movie' or 'tv'
@@ -106,9 +108,12 @@ class _MoviesScreenState extends State<MoviesScreen> {
     _load().then((_) {
       if (AppConfig.moviesUrl.isNotEmpty) _load(remote: true);
     });
-    // One after the other: on a slow connection Trending / Top 10 arrive
-    // first instead of fighting the other lists for the same bandwidth.
-    _loadTrending().whenComplete(_loadPopular);
+    _loadHome();
+    // The home keeps itself current: TMDB's lists are asked for again every
+    // 15 minutes while the app is open.
+    _refresh = Timer.periodic(const Duration(minutes: 15), (_) {
+      if (mounted) _loadHome(force: true);
+    });
     ContentSync.tick.addListener(_onSync);
     AppLocale.notifier.addListener(_onLanguage);
     MovieLibrary.instance
@@ -143,17 +148,31 @@ class _MoviesScreenState extends State<MoviesScreen> {
       return;
     }
     _load(remote: true);
-    _loadTrending();
-    _loadPopular();
+    _loadHome();
+  }
+
+  /// Trending and Popular together (the request limiter inside TmdbService
+  /// keeps a slow connection from choking). The home shows a loading card
+  /// while they arrive and an error only if they really failed.
+  Future<void> _loadHome({bool force = false}) async {
+    if (mounted) setState(() => _listsBusy = true);
+    try {
+      await Future.wait([
+        _loadTrending(force: force),
+        _loadPopular(force: force),
+      ]);
+    } catch (_) {}
+    TmdbService.homeReady.value = true;
+    if (!mounted) return;
+    setState(() => _listsBusy = false);
+    _fetchHomeRows();
   }
 
   /// A new day: new shuffle and a fresh copy of every TMDB list.
   void _newDay() {
     setState(() => _dayKey = _today());
     _discover.clear();
-    _loadTrending(force: true);
-    _loadPopular(force: true);
-    _fetchHomeRows();
+    _loadHome(force: true);
     if (_genre != null) _fetchDiscover();
   }
 
@@ -163,8 +182,7 @@ class _MoviesScreenState extends State<MoviesScreen> {
     if (_genre != null) _fetchDiscover();
     if (_query.trim().length >= 2) _onQuery(_query);
     _load().then((_) => _load(remote: true));
-    _loadTrending(force: true);
-    _loadPopular(force: true);
+    _loadHome(force: true);
   }
 
   @override
@@ -175,6 +193,7 @@ class _MoviesScreenState extends State<MoviesScreen> {
     _debounce?.cancel();
     _midnight?.cancel();
     _heroTimer?.cancel();
+    _refresh?.cancel();
     _heroCtl.dispose();
     _search.dispose();
     _sc.dispose();
@@ -676,8 +695,8 @@ class _MoviesScreenState extends State<MoviesScreen> {
                         OutlinedButton.icon(
                           onPressed: () {
                             setState(() => _loading = true);
-                            _load().then((_) => _loadTrending());
-                            _loadPopular();
+                            _load();
+                            _loadHome(force: true);
                           },
                           icon: const Icon(Icons.refresh_rounded),
                           label: Text('Retry'.tr),
@@ -881,6 +900,31 @@ class _MoviesScreenState extends State<MoviesScreen> {
     );
   }
 
+  /// Shown while TMDB's lists are still on their way (slow connections).
+  Widget _listsLoading() => Container(
+        margin: const EdgeInsets.fromLTRB(16, 4, 16, 14),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: .06),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Ui.glassLine),
+        ),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2.4, color: Ui.red),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Text('Loading what is trending on TMDB…'.tr,
+                  style: TextStyle(color: Ui.muted, fontWeight: FontWeight.w600)),
+            ),
+          ],
+        ),
+      );
+
   Widget _tmdbNotice() => Container(
         margin: const EdgeInsets.fromLTRB(16, 4, 16, 14),
         padding: const EdgeInsets.all(14),
@@ -899,8 +943,8 @@ class _MoviesScreenState extends State<MoviesScreen> {
                 children: [
                   Text('Live movie lists could not load.'.tr,
                       style: const TextStyle(fontWeight: FontWeight.w800)),
-                  if (TmdbService.lastNote.isNotEmpty)
-                    Text(TmdbService.lastNote,
+                  if (TmdbService.lastFailure.isNotEmpty)
+                    Text(TmdbService.lastFailure,
                         maxLines: 3,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(color: Ui.dim, fontSize: 11)),
@@ -909,7 +953,7 @@ class _MoviesScreenState extends State<MoviesScreen> {
             ),
             TextButton(
               onPressed: () {
-                _loadTrending(force: true).whenComplete(_loadPopular);
+                _loadHome(force: true);
               },
               child: Text('Retry'.tr),
             ),
@@ -940,6 +984,8 @@ class _MoviesScreenState extends State<MoviesScreen> {
     if (hot.isNotEmpty) {
       add('Trending Now'.tr, hot);
       add('Top 10 Today'.tr, hot, numbered: true, max: 10, min: 5);
+    } else if (TmdbService.enabled && _listsBusy) {
+      out.add(_listsLoading());
     } else if (TmdbService.enabled && !_loading) {
       // TMDB's live lists did not arrive: say why instead of filling the
       // home with copies of your own list.
