@@ -61,7 +61,7 @@ const FILES = {
 };
 
 const DEFAULT_RAW_BASE =
-  "https://raw.githubusercontent.com/Deeprows/myflutter-app/main/assets/data";
+  "https://raw.githubusercontent.com/Deeprows/SB/main/assets/data";
 
 const DATASET = "streambox_app";
 
